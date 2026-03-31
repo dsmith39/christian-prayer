@@ -1,6 +1,10 @@
 const STORAGE_KEY = "prayer-keep-auth-v1";
 const API_BASE_URL = "http://localhost:5000/api";
 
+const ALERT_POLL_INTERVAL_MS = 30_000;
+const LIST_DELETE_UNDO_MS = 5_000;
+const TOAST_DURATION_MS = 4_500;
+
 const state = {
   lists: [],
   prayers: [],
@@ -100,7 +104,7 @@ function escapeHtml(text) {
 }
 
 function computeNextAlertAt(timeValue, fromDate = new Date()) {
-  if (!timeValue || !timeValue.includes(":")) {
+  if (!timeValue || !/^\d{2}:\d{2}$/.test(timeValue)) {
     return null;
   }
 
@@ -128,7 +132,7 @@ function formatDateTime(timestamp) {
 }
 
 function showToast(message, options = {}) {
-  const { durationMs = 4500, actionText = null, onAction = null } = options;
+  const { durationMs = TOAST_DURATION_MS, actionText = null, onAction = null } = options;
   const toast = document.createElement("div");
   toast.className = "toast";
 
@@ -457,9 +461,9 @@ async function queueListDeletion(listId, listName) {
 
   const timeoutId = setTimeout(() => {
     commitListDeletion(listId, listName);
-  }, 5000);
+  }, LIST_DELETE_UNDO_MS);
 
-  const toastState = showDeleteCountdownToast(listId, listName, 5);
+  const toastState = showDeleteCountdownToast(listId, listName, LIST_DELETE_UNDO_MS / 1000);
 
   state.pendingListDeletes[listId] = {
     listName,
@@ -775,7 +779,7 @@ async function init() {
     return;
   }
 
-  setInterval(processAlerts, 30000);
+  setInterval(processAlerts, ALERT_POLL_INTERVAL_MS);
   processAlerts();
   render();
 }

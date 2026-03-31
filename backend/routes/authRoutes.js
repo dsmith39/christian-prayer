@@ -7,6 +7,9 @@ const { buildUncategorizedList, ensureUncategorizedList } = require("../utils/un
 
 const router = express.Router();
 
+const NAME_MAX = 80;
+const EMAIL_MAX = 254;
+
 function signToken(user) {
   return jwt.sign(
     {
@@ -28,6 +31,14 @@ router.post("/register", async (req, res, next) => {
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "name, email and password are required" });
+    }
+
+    if (name.length > NAME_MAX) {
+      return res.status(400).json({ message: `Name must be ${NAME_MAX} characters or fewer` });
+    }
+
+    if (email.length > EMAIL_MAX) {
+      return res.status(400).json({ message: "Invalid email address" });
     }
 
     if (password.length < 8) {
