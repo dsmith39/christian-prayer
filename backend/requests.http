@@ -1,0 +1,52 @@
+### Health check
+GET http://localhost:5000/api/health
+
+### Register user
+POST http://localhost:5000/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Demo User",
+  "email": "demo@example.com",
+  "password": "password123"
+}
+
+### Login user
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "demo@example.com",
+  "password": "password123"
+}
+
+### Fetch current user (replace TOKEN)
+GET http://localhost:5000/api/auth/me
+Authorization: Bearer TOKEN
+
+### Create prayer list (replace TOKEN)
+POST http://localhost:5000/api/users/lists
+Authorization: Bearer TOKEN
+Content-Type: application/json
+
+{
+  "name": "Family",
+  "description": "Family prayer needs"
+}
+
+### Create prayer request directly in Uncategorized (replace TOKEN)
+POST http://localhost:5000/api/users/prayers
+Authorization: Bearer TOKEN
+Content-Type: application/json
+
+{
+  "title": "Pray for guidance",
+  "notes": "For decisions this week",
+  "priority": "normal",
+  "alertEnabled": true,
+  "alertTime": "08:00"
+}
+
+### Delete prayer list (replace TOKEN and LIST_ID)
+DELETE http://localhost:5000/api/users/lists/LIST_ID
+Authorization: Bearer TOKEN

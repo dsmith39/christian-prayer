@@ -1,0 +1,19 @@
+{
+  "name": "jesus_idea",
+  "version": "1.0.0",
+  "description": "A simple website for creating prayer lists, adding prayer requests, and receiving daily prayer alerts.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "serve": "http-server . -p 5500 -c-1 -o /index.html",
+    "dev:frontend": "npm run serve"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  },
+  "private": true
+}

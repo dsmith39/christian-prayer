@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prayer Keep | Log In</title>
+    <link rel="icon" href="favicon.ico" sizes="any" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="auth-pages.css" />
+  </head>
+  <body data-auth-mode="login">
+    <main class="main-wrap">
+      <section class="card stack">
+        <p class="eyebrow">Prayer Keep</p>
+        <h2>Log In</h2>
+        <p>Welcome back. Log in to manage your prayer requests and lists.</p>
+
+        <form id="authForm" class="stack" autocomplete="off">
+          <label>
+            Email
+            <input id="email" name="email" type="email" maxlength="120" required />
+          </label>
+          <label>
+            Password
+            <input id="password" name="password" type="password" minlength="8" maxlength="120" required />
+          </label>
+          <button id="submitBtn" type="submit" class="primary">Log In</button>
+        </form>
+
+        <div class="helper-row">
+          <a href="index.html">Back to home</a>
+          <a href="register.html">Need an account? Register</a>
+        </div>
+
+        <p id="authMessage" class="status">Enter your credentials to continue.</p>
+      </section>
+    </main>
+
+    <script src="auth.js"></script>
+  </body>
+</html>
