@@ -6,7 +6,11 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve": "http-server . -p 5500 -c-1 -o /index.html",
-    "dev:frontend": "npm run serve"
+    "dev:frontend": "npm run serve",
+    "aws:prepare": "node deploy/aws/prepare.js",
+    "aws:prepare:example": "node deploy/aws/prepare.js --env-file deploy/aws/aws.env.example",
+    "aws:deploy": "powershell -ExecutionPolicy Bypass -File ./deploy/aws/deploy.ps1",
+    "aws:deploy:dry-run": "powershell -ExecutionPolicy Bypass -File ./deploy/aws/deploy.ps1 -DryRun"
   },
   "keywords": [],
   "author": "",

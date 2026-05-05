@@ -12,6 +12,17 @@ Express + MongoDB backend using Mongoose to store user prayer data.
 5. Run the API:
    - `npm run dev`
 
+## Docker
+
+Build and run locally:
+
+1. Build image from `backend/`:
+   - `docker build -t prayer-keep-api .`
+2. Run container:
+   - `docker run --env-file .env -p 5000:5000 prayer-keep-api`
+
+The Docker image is production-ready for ECS Fargate deployment.
+
 ## Environment Variables
 
 - `PORT` (default: `5000`)
@@ -43,3 +54,10 @@ A `User` document stores:
 - `POST /api/users/lists/:listId/prayers` create prayer request (requires Bearer token)
 - `PATCH /api/users/lists/:listId/prayers/:prayerId` update answered state (requires Bearer token)
 - `DELETE /api/users/lists/:listId/prayers/:prayerId` delete prayer request (requires Bearer token)
+
+## AWS Notes
+
+- Use `GET /api/health` for ALB and container health checks.
+- Set `CLIENT_ORIGIN` to your deployed frontend domain.
+- Store `MONGODB_URI` and `JWT_SECRET` in AWS Secrets Manager.
+- Generate the ECS task definition with `npm run aws:prepare` and deploy the output at `../deploy/aws/out/ecs-task-definition.json`.

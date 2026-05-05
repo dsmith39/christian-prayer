@@ -1,5 +1,7 @@
 const STORAGE_KEY = "prayer-keep-auth-v1";
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL =
+  window.APP_CONFIG?.API_BASE_URL ||
+  `${window.location.protocol}//${window.location.hostname}:5000/api`;
 
 const mode = document.body.dataset.authMode;
 const form = document.getElementById("authForm");
@@ -87,7 +89,7 @@ async function request(path, options = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (_error) {
-    throw new Error("Cannot reach backend. Make sure backend server is running on port 5000.");
+    throw new Error("Cannot reach backend. Check your API base URL configuration.");
   }
 
   const payload = await response.json().catch(() => ({}));

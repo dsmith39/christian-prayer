@@ -18,6 +18,8 @@ pnpm-debug.log*
 dist/
 build/
 coverage/
+deploy/aws/out/
+deploy/aws/aws.env
 
 # OS and editor files
 .DS_Store
