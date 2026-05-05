@@ -1,3 +1,24 @@
+/**
+ * routes/userRoutes.js
+ * ---------------------
+ * Authenticated endpoints for managing a user's prayer lists and prayer
+ * requests. All routes are mounted at /api/users in server.js and require
+ * a valid Bearer JWT (enforced by authMiddleware before this router runs).
+ *
+ * Route summary:
+ *   GET    /api/users/me                                 - Fetch full user profile.
+ *   POST   /api/users/lists                              - Create a prayer list.
+ *   PATCH  /api/users/lists/:listId                      - Rename / update a list.
+ *   DELETE /api/users/lists/:listId                      - Delete a list (and all its prayers).
+ *   POST   /api/users/lists/:listId/prayers              - Add a prayer to a specific list.
+ *   POST   /api/users/prayers                            - Add a prayer to Uncategorized.
+ *   PATCH  /api/users/lists/:listId/prayers/:prayerId    - Update a prayer request.
+ *   DELETE /api/users/lists/:listId/prayers/:prayerId    - Delete a prayer request.
+ *
+ * Every successful response returns { user: <full User document> } so the
+ * frontend can replace its entire local state with the authoritative server
+ * copy in a single round-trip, avoiding stale-data bugs.
+ */
 const express = require("express");
 const User = require("../models/User");
 const {
@@ -8,6 +29,27 @@ const {
 
 const router = express.Router();
 
+// ---------------------------------------------------------------------------
+// Shared field length limits — mirror the Mongoose schema and frontend forms.
+// ---------------------------------------------------------------------------
+const PRAYER_TITLE_MAX = 80;
+const PRAYER_NOTES_MAX = 240;
+const LIST_NAME_MAX = 40;
+const LIST_DESCRIPTION_MAX = 90;
+/** Valid "HH:MM" alert time format. */
+const ALERT_TIME_PATTERN = /^\d{2}:\d{2}$/;
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Shapes the user document into the standard API response object.
+ * Only the fields the frontend needs are exposed.
+ *
+ * @param {object} user - A Mongoose User document.
+ * @returns {object}
+ */
 function userResponse(user) {
   return {
     _id: user._id,
@@ -17,6 +59,14 @@ function userResponse(user) {
   };
 }
 
+/**
+ * Loads the user by ID and guarantees the Uncategorized system list exists.
+ * Saves automatically if the list had to be created or repaired.
+ * Returns null when no matching user document is found.
+ *
+ * @param {string} userId
+ * @returns {Promise<object|null>}
+ */
 async function findUserWithUncategorized(userId) {
   const user = await User.findById(userId);
   if (!user) {
@@ -31,12 +81,15 @@ async function findUserWithUncategorized(userId) {
   return user;
 }
 
-const PRAYER_TITLE_MAX = 80;
-const PRAYER_NOTES_MAX = 240;
-const LIST_NAME_MAX = 40;
-const LIST_DESCRIPTION_MAX = 90;
-const ALERT_TIME_PATTERN = /^\d{2}:\d{2}$/;
-
+/**
+ * Extracts and sanitizes the prayer request fields from req.body.
+ * Unknown priority values fall back to "normal".
+ * alertTime is set to null whenever alertEnabled is false or the value
+ * doesn't match "HH:MM", preventing bad data from reaching the database.
+ *
+ * @param {import('express').Request} req
+ * @returns {{ title, notes, priority, alertEnabled, alertTime }}
+ */
 function parsePrayerPayload(req) {
   const title = String(req.body.title || "").trim();
   const notes = String(req.body.notes || "").trim();
@@ -45,6 +98,7 @@ function parsePrayerPayload(req) {
     : "normal";
   const alertEnabled = Boolean(req.body.alertEnabled);
   const rawAlertTime = String(req.body.alertTime || "").trim();
+  // Only persist alertTime when alerts are on AND the format is valid.
   const alertTime = alertEnabled && ALERT_TIME_PATTERN.test(rawAlertTime) ? rawAlertTime : null;
 
   return {
@@ -56,6 +110,15 @@ function parsePrayerPayload(req) {
   };
 }
 
+
+
+// ---------------------------------------------------------------------------
+// GET /api/users/me
+// ---------------------------------------------------------------------------
+/**
+ * Returns the authenticated user's full profile including all prayer lists
+ * and requests. The frontend calls this on dashboard load to hydrate state.
+ */
 router.get("/me", async (req, res, next) => {
   try {
     const user = await findUserWithUncategorized(req.auth.userId);
@@ -69,6 +132,13 @@ router.get("/me", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/users/lists
+// ---------------------------------------------------------------------------
+/**
+ * Creates a new prayer list for the authenticated user.
+ * Returns the full updated user document so the frontend can re-render.
+ */
 router.post("/lists", async (req, res, next) => {
   try {
     const name = String(req.body.name || "").trim();
@@ -100,6 +170,16 @@ router.post("/lists", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// PATCH /api/users/lists/:listId
+// ---------------------------------------------------------------------------
+/**
+ * Updates the name and/or description of an existing prayer list.
+ * System lists (Uncategorized) cannot be renamed — returns 403.
+ *
+ * Partial update: sending only `name` leaves `description` unchanged, and
+ * vice versa. To clear a description, send description: "".
+ */
 router.patch("/lists/:listId", async (req, res, next) => {
   try {
     const name = String(req.body.name || "").trim();
@@ -145,6 +225,14 @@ router.patch("/lists/:listId", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /api/users/lists/:listId
+// ---------------------------------------------------------------------------
+/**
+ * Permanently deletes a prayer list and all of its prayer requests.
+ * The Uncategorized system list cannot be deleted — returns 403.
+ * The frontend shows a 5-second undo toast before calling this endpoint.
+ */
 router.delete("/lists/:listId", async (req, res, next) => {
   try {
     const user = await findUserWithUncategorized(req.auth.userId);
@@ -170,6 +258,13 @@ router.delete("/lists/:listId", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/users/lists/:listId/prayers
+// ---------------------------------------------------------------------------
+/**
+ * Adds a new prayer request to the specified list.
+ * The frontend uses this when the user has a list selected in the sidebar.
+ */
 router.post("/lists/:listId/prayers", async (req, res, next) => {
   try {
     const { title, notes, priority, alertEnabled, alertTime } = parsePrayerPayload(req);
@@ -212,6 +307,13 @@ router.post("/lists/:listId/prayers", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/users/prayers
+// ---------------------------------------------------------------------------
+/**
+ * Shortcut route: adds a prayer request directly to the Uncategorized list.
+ * Used when no specific list is selected on the dashboard.
+ */
 router.post("/prayers", async (req, res, next) => {
   try {
     const { title, notes, priority, alertEnabled, alertTime } = parsePrayerPayload(req);
@@ -254,6 +356,17 @@ router.post("/prayers", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// PATCH /api/users/lists/:listId/prayers/:prayerId
+// ---------------------------------------------------------------------------
+/**
+ * Partially updates a prayer request. Only fields present in the request
+ * body are applied; omitted fields are left unchanged.
+ *
+ * Supports updating: title, notes, priority, answered, alertEnabled, alertTime.
+ * The frontend uses this for "Mark Answered", "Mark Active", and future edit
+ * flows.
+ */
 router.patch("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
   try {
     const user = await findUserWithUncategorized(req.auth.userId);
@@ -311,6 +424,13 @@ router.patch("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /api/users/lists/:listId/prayers/:prayerId
+// ---------------------------------------------------------------------------
+/**
+ * Permanently deletes a single prayer request from a list.
+ * The frontend confirms with the user before calling this endpoint.
+ */
 router.delete("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
   try {
     const user = await findUserWithUncategorized(req.auth.userId);
@@ -337,6 +457,12 @@ router.delete("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /api/users/me
+// ---------------------------------------------------------------------------
+/**
+ * Permanently deletes the authenticated user's account and all their data.
+ */
 router.delete("/me", async (req, res, next) => {
   try {
     const deleted = await User.findByIdAndDelete(req.auth.userId);

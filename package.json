@@ -1,7 +1,7 @@
 {
-  "name": "jesus_idea",
+  "name": "faithrequest",
   "version": "1.0.0",
-  "description": "A simple website for creating prayer lists, adding prayer requests, and receiving daily prayer alerts.",
+  "description": "FaithRequest — organize prayer requests into lists, track answered prayers, and set daily reminders. Hosted at faithrequest.com.",
   "main": "app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

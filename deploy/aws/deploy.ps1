@@ -120,7 +120,7 @@ $envValues = Parse-EnvFile -Path $envFilePath
 
 $awsRegion = Get-RequiredValue -Values $envValues -Key "AWS_REGION"
 $awsAccountId = Get-RequiredValue -Values $envValues -Key "AWS_ACCOUNT_ID"
-$ecrRepository = Get-OptionalValue -Values $envValues -Key "ECR_REPOSITORY" -Default "prayer-keep-api"
+$ecrRepository = Get-OptionalValue -Values $envValues -Key "ECR_REPOSITORY" -Default "faithrequest-api"
 $imageTag = Get-OptionalValue -Values $envValues -Key "IMAGE_TAG" -Default "latest"
 $ecsCluster = Get-OptionalValue -Values $envValues -Key "ECS_CLUSTER"
 $ecsService = Get-OptionalValue -Values $envValues -Key "ECS_SERVICE"

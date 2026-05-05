@@ -1,6 +1,6 @@
-# Prayer Keep Backend
+# FaithRequest Backend
 
-Express + MongoDB backend using Mongoose to store user prayer data.
+Express + MongoDB backend using Mongoose to store user prayer data for FaithRequest (faithrequest.com).
 
 ## Setup
 
@@ -17,9 +17,9 @@ Express + MongoDB backend using Mongoose to store user prayer data.
 Build and run locally:
 
 1. Build image from `backend/`:
-   - `docker build -t prayer-keep-api .`
+   - `docker build -t faithrequest-api .`
 2. Run container:
-   - `docker run --env-file .env -p 5000:5000 prayer-keep-api`
+   - `docker run --env-file .env -p 5000:5000 faithrequest-api`
 
 The Docker image is production-ready for ECS Fargate deployment.
 
@@ -58,6 +58,6 @@ A `User` document stores:
 ## AWS Notes
 
 - Use `GET /api/health` for ALB and container health checks.
-- Set `CLIENT_ORIGIN` to your deployed frontend domain.
+- Set `CLIENT_ORIGIN` to your deployed frontend domain (e.g., `https://faithrequest.com`).
 - Store `MONGODB_URI` and `JWT_SECRET` in AWS Secrets Manager.
 - Generate the ECS task definition with `npm run aws:prepare` and deploy the output at `../deploy/aws/out/ecs-task-definition.json`.

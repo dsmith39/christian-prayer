@@ -114,7 +114,7 @@ function optionalValue(env, key, fallback) {
 function collectConfig(env) {
   const awsRegion = requiredValue(env, "AWS_REGION");
   const awsAccountId = requiredValue(env, "AWS_ACCOUNT_ID");
-  const ecrRepository = optionalValue(env, "ECR_REPOSITORY", "prayer-keep-api");
+  const ecrRepository = optionalValue(env, "ECR_REPOSITORY", "faithrequest-api");
   const imageTag = optionalValue(env, "IMAGE_TAG", "latest");
   const containerPort = Number(optionalValue(env, "CONTAINER_PORT", "5000"));
 
@@ -124,14 +124,14 @@ function collectConfig(env) {
     ecrRepository,
     imageTag,
     imageUri: `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/${ecrRepository}:${imageTag}`,
-    ecsTaskFamily: optionalValue(env, "ECS_TASK_FAMILY", "prayer-keep-api"),
-    ecsContainerName: optionalValue(env, "ECS_CONTAINER_NAME", "prayer-keep-api"),
+    ecsTaskFamily: optionalValue(env, "ECS_TASK_FAMILY", "faithrequest-api"),
+    ecsContainerName: optionalValue(env, "ECS_CONTAINER_NAME", "faithrequest-api"),
     ecsExecutionRoleArn: requiredValue(env, "ECS_EXECUTION_ROLE_ARN"),
     ecsTaskRoleArn: requiredValue(env, "ECS_TASK_ROLE_ARN"),
     ecsCpu: optionalValue(env, "ECS_CPU", "256"),
     ecsMemory: optionalValue(env, "ECS_MEMORY", "512"),
     containerPort,
-    logGroup: optionalValue(env, "LOG_GROUP", "/ecs/prayer-keep-api"),
+    logGroup: optionalValue(env, "LOG_GROUP", "/ecs/faithrequest-api"),
     logStreamPrefix: optionalValue(env, "LOG_STREAM_PREFIX", "ecs"),
     apiBaseUrl: requiredValue(env, "API_BASE_URL"),
     clientOrigin: requiredValue(env, "CLIENT_ORIGIN"),

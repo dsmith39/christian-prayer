@@ -1,4 +1,4 @@
-AWS deployment assets for Prayer Keep.
+AWS deployment assets for FaithRequest (faithrequest.com).
 
 Files:
 - aws.env.example: copy to `aws.env` and fill in your environment-specific values.

@@ -1,7 +1,7 @@
 {
-  "name": "prayer-keep-backend",
+  "name": "faithrequest-backend",
   "version": "1.0.0",
-  "description": "Backend API for Prayer Keep",
+  "description": "Backend API for FaithRequest (faithrequest.com)",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

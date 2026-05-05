@@ -1,6 +1,6 @@
-# Prayer Keep (MVP)
+# FaithRequest
 
-A simple website for creating prayer lists, adding prayer requests, and receiving daily prayer alerts.
+A prayer request management app for organizing lists, tracking answered prayers, and setting daily reminders. Hosted at [faithrequest.com](https://faithrequest.com).
 
 Frontend pages:
 
@@ -43,7 +43,7 @@ The frontend reads the API base URL from `config.js`.
 
 Before deploying static files to AWS (S3 + CloudFront), set `config.js` to your production API URL, for example:
 
-- `https://api.your-domain.com/api`
+- `https://api.faithrequest.com/api`
 
 ## Backend (MongoDB + Mongoose)
 

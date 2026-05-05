@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prayer Keep AWS Deployment Guide</title>
+    <title>FaithRequest AWS Deployment Guide</title>
     <style>
       :root {
         color-scheme: light;
@@ -99,9 +99,9 @@
     </style>
   </head>
   <body>
-    <h1>Prayer Keep AWS Deployment Guide</h1>
+    <h1>FaithRequest AWS Deployment Guide</h1>
     <p class="lede">
-      Step-by-step instructions for deploying the Prayer Keep frontend to S3 +
+      Step-by-step instructions for deploying the FaithRequest frontend to S3 +
       CloudFront and the backend API to ECS Fargate + ALB.
     </p>
 
@@ -113,8 +113,8 @@
 
     <h2>1. Architecture</h2>
     <ol>
-      <li><code>app.your-domain.com</code> serves the frontend through CloudFront.</li>
-      <li><code>api.your-domain.com</code> routes to an ALB, then to ECS Fargate.</li>
+      <li><code>faithrequest.com</code> serves the frontend through CloudFront.</li>
+      <li><code>api.faithrequest.com</code> routes to an ALB, then to ECS Fargate.</li>
       <li>MongoDB Atlas stores all application data.</li>
       <li>AWS Secrets Manager stores the backend secrets.</li>
     </ol>
@@ -138,13 +138,13 @@
     </ol>
 
     <h3>3.2 Create an ECR Repository</h3>
-    <pre>aws ecr create-repository --repository-name prayer-keep-api</pre>
+    <pre>aws ecr create-repository --repository-name faithrequest-api</pre>
 
     <h3>3.3 Create an ECS Cluster</h3>
-    <pre>aws ecs create-cluster --cluster-name prayer-keep-prod</pre>
+    <pre>aws ecs create-cluster --cluster-name faithrequest-prod</pre>
 
     <h3>3.4 Create the CloudWatch Log Group</h3>
-    <pre>aws logs create-log-group --log-group-name /ecs/prayer-keep-api</pre>
+    <pre>aws logs create-log-group --log-group-name /ecs/faithrequest-api</pre>
 
     <h3>3.5 Create IAM Roles</h3>
     <ol>
@@ -170,7 +170,7 @@
     </ol>
 
     <h3>3.8 Create the Frontend S3 Bucket</h3>
-    <pre>aws s3 mb s3://prayer-keep-web-prod</pre>
+    <pre>aws s3 mb s3://faithrequest-web-prod</pre>
 
     <h3>3.9 Create the CloudFront Distribution</h3>
     <ol>

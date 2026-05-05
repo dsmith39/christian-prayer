@@ -1,15 +1,15 @@
 {
-  "family": "prayer-keep-api",
+  "family": "faithrequest-api",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
   "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::<account-id>:role/prayer-keep-task-role",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/faithrequest-task-role",
   "containerDefinitions": [
     {
-      "name": "prayer-keep-api",
-      "image": "<account-id>.dkr.ecr.<region>.amazonaws.com/prayer-keep-api:latest",
+      "name": "faithrequest-api",
+      "image": "<account-id>.dkr.ecr.<region>.amazonaws.com/faithrequest-api:latest",
       "essential": true,
       "portMappings": [
         {
@@ -28,7 +28,7 @@
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/prayer-keep-api",
+          "awslogs-group": "/ecs/faithrequest-api",
           "awslogs-region": "<region>",
           "awslogs-stream-prefix": "ecs"
         }
@@ -36,11 +36,11 @@
       "secrets": [
         {
           "name": "MONGODB_URI",
-          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:prayer-keep/prod/MONGODB_URI"
+          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:faithrequest/prod/MONGODB_URI"
         },
         {
           "name": "JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:prayer-keep/prod/JWT_SECRET"
+          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:faithrequest/prod/JWT_SECRET"
         }
       ],
       "environment": [

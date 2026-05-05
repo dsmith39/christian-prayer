@@ -1,12 +1,67 @@
-const STORAGE_KEY = "prayer-keep-auth-v1";
+/**
+ * app.js
+ * -------
+ * Main application script for the FaithRequest dashboard (dashboard.html).
+ *
+ * Architecture overview:
+ *   - Pure vanilla JS, no framework. All state lives in the `state` object.
+ *   - On load, reads any cached auth/session data from localStorage, then
+ *     fetches the full user profile from the backend to hydrate state.
+ *   - Every mutation (create/update/delete list or prayer) calls the REST API,
+ *     then calls applyUserData() with the returned user object to replace the
+ *     entire local state, keeping the UI in sync with the server.
+ *   - DOM is re-rendered from scratch on every state change (render()).
+ *     Performance is fine at the scale of prayer lists.
+ *   - Browser notifications are optional. The app still works with in-app
+ *     toast messages if the user denies notification permission.
+ *
+ * Key concepts:
+ *   state         - Single source of truth for lists, prayers, and auth.
+ *   dom           - Cached references to DOM elements (queried once on load).
+ *   STORAGE_KEY   - localStorage key for persisting session between page loads.
+ *   apiRequest()  - Fetch wrapper: attaches Bearer token, parses JSON, handles
+ *                   401 (session expired → redirect to login).
+ *   applyUserData()- Transforms the server User document into local state shape.
+ *   render()      - Reads state and rebuilds the DOM.
+ *   init()        - Entry point, called on DOMContentLoaded.
+ */
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** localStorage key — must match the constant in auth.js. */
+const STORAGE_KEY = "faithrequest-auth-v1";
+
+/**
+ * Backend API base URL. Reads from window.APP_CONFIG (set in config.js) so
+ * the same app.js works in dev and production without modification.
+ */
 const API_BASE_URL =
   window.APP_CONFIG?.API_BASE_URL ||
   `${window.location.protocol}//${window.location.hostname}:5000/api`;
 
+/** How often (ms) the alert scheduler runs to check if a prayer reminder is due. */
 const ALERT_POLL_INTERVAL_MS = 30_000;
+/** How long (ms) the user has to undo a list deletion before it's committed. */
 const LIST_DELETE_UNDO_MS = 5_000;
+/** How long (ms) a standard toast notification stays visible. */
 const TOAST_DURATION_MS = 4_500;
 
+// ---------------------------------------------------------------------------
+// Application state
+// ---------------------------------------------------------------------------
+
+/**
+ * Single source of truth for the entire dashboard.
+ *
+ * lists[]            - Flat array of prayer list objects (derived from server).
+ * prayers[]          - Flat array of prayer request objects (derived from server).
+ * selectedListId     - ID of the list currently shown in the prayer panel.
+ * pendingListDeletes - Map of listId → undo state for lists queued for deletion.
+ * auth.token         - JWT for authenticating API requests.
+ * auth.user          - Minimal user profile (id, name, email).
+ */
 const state = {
   lists: [],
   prayers: [],
@@ -18,6 +73,14 @@ const state = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// DOM element cache
+// ---------------------------------------------------------------------------
+
+/**
+ * All DOM references are queried once here rather than inside render loops.
+ * If a new element is added to dashboard.html, add it here too.
+ */
 const dom = {
   listForm: document.getElementById("listForm"),
   prayerForm: document.getElementById("prayerForm"),
@@ -42,6 +105,15 @@ const dom = {
   logoutBtn: document.getElementById("logoutBtn"),
 };
 
+// ---------------------------------------------------------------------------
+// localStorage persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the persisted session from localStorage and seeds `state` with it.
+ * Only restores selectedListId and auth — lists and prayers always come from
+ * the server on each load.
+ */
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
@@ -54,10 +126,15 @@ function loadState() {
     state.auth.token = typeof parsed.auth?.token === "string" ? parsed.auth.token : null;
     state.auth.user = parsed.auth?.user || null;
   } catch {
+    // Corrupt data — remove it so the app starts clean.
     localStorage.removeItem(STORAGE_KEY);
   }
 }
 
+/**
+ * Writes the minimal session fields to localStorage.
+ * Called after every mutation that changes selectedListId or auth.
+ */
 function saveState() {
   localStorage.setItem(
     STORAGE_KEY,
@@ -71,7 +148,13 @@ function saveState() {
   );
 }
 
+/**
+ * Clears the authenticated session from both memory and localStorage.
+ * Also cancels any in-progress list-deletion timers to avoid orphaned state.
+ * Called on logout and on 401 responses from the API.
+ */
 function clearSession() {
+  // Clean up pending deletion timers so they don't fire after logout.
   Object.values(state.pendingListDeletes).forEach((entry) => {
     clearTimeout(entry.timeoutId);
     clearInterval(entry.countdownIntervalId);
@@ -88,14 +171,38 @@ function clearSession() {
   saveState();
 }
 
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
+/** Redirects the browser to login.html. */
 function redirectToLogin() {
   window.location.href = "login.html";
 }
 
+/**
+ * Returns true when the in-memory state has a token AND a user ID,
+ * indicating the session is at least nominally valid.
+ * The actual server-side check happens in hydrateFromServer().
+ *
+ * @returns {boolean}
+ */
 function isAuthenticated() {
   return Boolean(state.auth.token && state.auth.user?._id);
 }
 
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Escapes HTML special characters to prevent XSS when inserting user-supplied
+ * text via innerHTML. Use this on every piece of user content rendered into
+ * the DOM with innerHTML or template literals.
+ *
+ * @param {string|number} text
+ * @returns {string} HTML-safe string.
+ */
 function escapeHtml(text) {
   return String(text)
     .replaceAll("&", "&amp;")
@@ -105,6 +212,15 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
+/**
+ * Calculates the Unix timestamp (ms) of the next occurrence of the given
+ * "HH:MM" time, relative to `fromDate`. If the time has already passed today,
+ * returns tomorrow's occurrence.
+ *
+ * @param {string} timeValue - "HH:MM" 24-hour time string.
+ * @param {Date}   fromDate  - Reference date (default: now).
+ * @returns {number|null}    - Timestamp in ms, or null if timeValue is invalid.
+ */
 function computeNextAlertAt(timeValue, fromDate = new Date()) {
   if (!timeValue || !/^\d{2}:\d{2}$/.test(timeValue)) {
     return null;
@@ -114,6 +230,7 @@ function computeNextAlertAt(timeValue, fromDate = new Date()) {
   const next = new Date(fromDate);
   next.setHours(hour, minute, 0, 0);
 
+  // If the computed time is in the past, schedule for tomorrow.
   if (next.getTime() <= fromDate.getTime()) {
     next.setDate(next.getDate() + 1);
   }
@@ -121,6 +238,13 @@ function computeNextAlertAt(timeValue, fromDate = new Date()) {
   return next.getTime();
 }
 
+/**
+ * Formats a Unix timestamp as a human-readable short date/time string.
+ * Returns "No alert" when the timestamp is falsy.
+ *
+ * @param {number|null} timestamp
+ * @returns {string} e.g. "Mon, 9:00 AM"
+ */
 function formatDateTime(timestamp) {
   if (!timestamp) {
     return "No alert";
@@ -133,6 +257,20 @@ function formatDateTime(timestamp) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Toast notification system
+// ---------------------------------------------------------------------------
+
+/**
+ * Displays a temporary toast message in the aria-live toast region.
+ * Supports an optional action button (e.g. "Undo") for reversible operations.
+ *
+ * @param {string} message             - Text to display.
+ * @param {{ durationMs?, actionText?, onAction? }} options
+ *   durationMs  - How long the toast stays visible (default: TOAST_DURATION_MS).
+ *   actionText  - Label for the optional action button.
+ *   onAction    - Callback invoked when the action button is clicked.
+ */
 function showToast(message, options = {}) {
   const { durationMs = TOAST_DURATION_MS, actionText = null, onAction = null } = options;
   const toast = document.createElement("div");
@@ -162,6 +300,24 @@ function showToast(message, options = {}) {
   }, durationMs);
 }
 
+// ---------------------------------------------------------------------------
+// API layer
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch wrapper for all authenticated API calls.
+ *
+ * - Attaches the Bearer token from state.auth.token.
+ * - Serializes body as JSON when provided.
+ * - Automatically handles 401 (session expired): clears session and redirects.
+ * - Throws descriptive errors for all non-2xx responses so callers can
+ *   display them via showToast().
+ *
+ * @param {string} path                  - API path relative to API_BASE_URL.
+ * @param {{ method?, body? }} options
+ * @returns {Promise<object>}            - Parsed JSON response body.
+ * @throws {Error}                       - On network failure or non-2xx status.
+ */
 async function apiRequest(path, options = {}) {
   const { method = "GET", body = null } = options;
   const headers = {
@@ -187,6 +343,8 @@ async function apiRequest(path, options = {}) {
 
   if (!response.ok) {
     if (response.status === 401) {
+      // Token is expired or revoked — clear the session and send the user
+      // back to the login page.
       clearSession();
       redirectToLogin();
       throw new Error("Your session expired. Please log in again.");
@@ -197,6 +355,23 @@ async function apiRequest(path, options = {}) {
 
   return payload;
 }
+
+// ---------------------------------------------------------------------------
+// State management
+// ---------------------------------------------------------------------------
+
+/**
+ * Replaces the entire local lists/prayers state with the data returned by the
+ * server after any successful API call. This is the single function that keeps
+ * the frontend in sync with the backend.
+ *
+ * Converts the nested server shape (User → prayerLists[] → prayers[]) into
+ * two flat arrays (state.lists and state.prayers) for easier rendering and
+ * lookup. Also restores the previously selected list when possible.
+ *
+ * @param {object} user - The full User document from the API response.
+ */
+
 
 function applyUserData(user) {
   const previousSelected = state.selectedListId;
@@ -263,6 +438,12 @@ function applyUserData(user) {
   saveState();
 }
 
+/**
+ * Returns the currently selected list, or null if nothing is selected or the
+ * selected list is pending deletion.
+ *
+ * @returns {object|null}
+ */
 function getSelectedList() {
   return (
     state.lists.find(
@@ -271,10 +452,24 @@ function getSelectedList() {
   );
 }
 
+/**
+ * Counts active (non-answered) prayer requests in the given list.
+ * Used to show the badge count on each list button.
+ *
+ * @param {string} listId
+ * @returns {number}
+ */
 function getListPrayerCount(listId) {
   return state.prayers.filter((prayer) => prayer.listId === listId && !prayer.answered).length;
 }
 
+/**
+ * Enables or disables all form inputs and submit buttons.
+ * Called with false during async operations to prevent double-submit,
+ * and with true after the operation completes.
+ *
+ * @param {boolean} enabled
+ */
 function setFormsEnabled(enabled) {
   dom.listName.disabled = !enabled;
   dom.listDescription.disabled = !enabled;
@@ -288,6 +483,15 @@ function setFormsEnabled(enabled) {
   dom.addPrayerBtn.disabled = !enabled || !getSelectedList();
 }
 
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * Rebuilds the list sidebar from state.lists.
+ * System lists show a lock badge and no delete button.
+ * Lists pending deletion are hidden until the undo window expires.
+ */
 function renderLists() {
   dom.listContainer.innerHTML = "";
 
@@ -348,15 +552,32 @@ function renderLists() {
   });
 }
 
+/**
+ * Returns the ID of the first list that is not pending deletion,
+ * used to auto-select a new list when the selected one is queued for delete.
+ *
+ * @returns {string|null}
+ */
 function firstVisibleListId() {
   const list = state.lists.find((item) => !state.pendingListDeletes[item.id]);
   return list ? list.id : null;
 }
 
+/** Formats the countdown message shown in the delete undo toast. */
 function formatDeleteCountdownMessage(listName, secondsLeft) {
   return `"${listName}" will be deleted in ${secondsLeft}s.`;
 }
 
+/**
+ * Creates and mounts a toast with a live countdown and an Undo button.
+ * Returns references to the DOM element and timer IDs so they can be
+ * cancelled if the user presses Undo or the page unmounts.
+ *
+ * @param {string} listId
+ * @param {string} listName
+ * @param {number} totalSeconds
+ * @returns {{ toastEl, countdownIntervalId, toastRemoveTimerId }}
+ */
 function showDeleteCountdownToast(listId, listName, totalSeconds) {
   const toast = document.createElement("div");
   toast.className = "toast";
@@ -398,6 +619,12 @@ function showDeleteCountdownToast(listId, listName, totalSeconds) {
   };
 }
 
+/**
+ * Cancels the pending deletion for a list and restores it in the UI.
+ * Called when the user clicks the Undo button in the countdown toast.
+ *
+ * @param {string} listId
+ */
 function undoListDeletion(listId) {
   const pending = state.pendingListDeletes[listId];
   if (!pending) {
@@ -419,6 +646,13 @@ function undoListDeletion(listId) {
   showToast("List deletion canceled.");
 }
 
+/**
+ * Called when the LIST_DELETE_UNDO_MS window expires.
+ * Sends the DELETE request to the server and updates state.
+ *
+ * @param {string} listId
+ * @param {string} listName
+ */
 async function commitListDeletion(listId, listName) {
   const pending = state.pendingListDeletes[listId];
   if (!pending) {
@@ -443,6 +677,19 @@ async function commitListDeletion(listId, listName) {
   }
 }
 
+/**
+ * Begins the soft-delete flow for a prayer list:
+ *   1. Confirms with the user via window.confirm.
+ *   2. Marks the list as pending deletion so it disappears from the UI.
+ *   3. Starts a LIST_DELETE_UNDO_MS countdown toast with an Undo button.
+ *   4. On expiry, calls commitListDeletion() to hit the DELETE API.
+ *
+ * Prevents duplicate deletion of the same list if already queued.
+ * System lists (Uncategorized) are blocked from deletion.
+ *
+ * @param {string} listId
+ * @param {string} listName
+ */
 async function queueListDeletion(listId, listName) {
   if (state.pendingListDeletes[listId]) {
     return;
@@ -480,6 +727,10 @@ async function queueListDeletion(listId, listName) {
   render();
 }
 
+/**
+ * Updates the title and description above the prayer grid based on the
+ * currently selected list. Shows a prompt when nothing is selected.
+ */
 function renderPrayerPanelHeader() {
   const selectedList = getSelectedList();
   if (!selectedList) {
@@ -494,6 +745,14 @@ function renderPrayerPanelHeader() {
     selectedList.description || "Add requests and set daily alerts.";
 }
 
+/**
+ * Rebuilds the prayer grid for the selected list.
+ *
+ * Sort order: active prayers (newest first) → answered prayers.
+ * Each card renders the title, notes, priority tag, alert info, and
+ * action buttons (Mark Answered/Active + Delete) via data attributes.
+ * All user-supplied text is passed through escapeHtml() before injection.
+ */
 function renderPrayers() {
   dom.prayerGrid.innerHTML = "";
 
@@ -549,6 +808,10 @@ function renderPrayers() {
     });
 }
 
+/**
+ * Master render function. Re-runs every render sub-function from state.
+ * Called after every state mutation.
+ */
 function render() {
   renderLists();
   renderPrayerPanelHeader();
@@ -557,16 +820,31 @@ function render() {
   setFormsEnabled(true);
 }
 
+/**
+ * Fetches the current user's full profile from GET /api/auth/me and applies
+ * it to local state. Called once on init to get authoritative server data.
+ */
 async function hydrateFromServer() {
   const payload = await apiRequest("/auth/me");
   applyUserData(payload.user);
 }
 
+/** Clears the session and redirects to the login page. */
 function logout() {
   clearSession();
   redirectToLogin();
 }
 
+// ---------------------------------------------------------------------------
+// Form submit handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Handles the "Create List" form submission.
+ * After creating the list, auto-selects it in the sidebar.
+ *
+ * @param {SubmitEvent} event
+ */
 async function createList(event) {
   event.preventDefault();
 
@@ -598,6 +876,13 @@ async function createList(event) {
   }
 }
 
+/**
+ * Handles the "Add Prayer Request" form submission.
+ * Falls back to the Uncategorized list when nothing is selected so the user
+ * can always add a prayer even before creating a custom list.
+ *
+ * @param {SubmitEvent} event
+ */
 async function createPrayer(event) {
   event.preventDefault();
 
@@ -655,6 +940,15 @@ async function createPrayer(event) {
   }
 }
 
+/**
+ * Event delegation handler for buttons inside the prayer grid.
+ * Reads data-action ("toggle" | "delete") and data-id from the clicked button.
+ *
+ *   toggle - Flips the answered state of the prayer request.
+ *   delete - Permanently removes the prayer request.
+ *
+ * @param {MouseEvent} event
+ */
 async function handlePrayerGridClick(event) {
   const button = event.target.closest("button[data-action]");
   if (!button) {
@@ -697,6 +991,14 @@ async function handlePrayerGridClick(event) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Browser notification system
+// ---------------------------------------------------------------------------
+
+/**
+ * Updates the Enable Notifications button text/state based on the current
+ * Notification.permission value. Called inside render().
+ */
 function updateNotificationButton() {
   if (!("Notification" in window)) {
     dom.enableNotificationsBtn.disabled = true;
@@ -714,6 +1016,10 @@ function updateNotificationButton() {
   dom.enableNotificationsBtn.textContent = "Enable Notifications";
 }
 
+/**
+ * Requests browser notification permission from the user.
+ * Shows a toast regardless of the outcome so the user knows what happened.
+ */
 async function requestNotificationPermission() {
   if (!("Notification" in window)) {
     showToast("Browser notifications are not supported here.");
@@ -730,6 +1036,12 @@ async function requestNotificationPermission() {
   updateNotificationButton();
 }
 
+/**
+ * Fires an in-app toast AND a browser notification (if permission granted)
+ * for a prayer request whose alert time has passed.
+ *
+ * @param {object} prayer - A prayer object from state.prayers.
+ */
 function triggerPrayerAlert(prayer) {
   const list = state.lists.find((item) => item.id === prayer.listId);
   const listName = list ? list.name : "Prayer list";
@@ -738,13 +1050,18 @@ function triggerPrayerAlert(prayer) {
   showToast(message);
 
   if ("Notification" in window && Notification.permission === "granted") {
-    new Notification("Prayer Keep Reminder", {
+    new Notification("FaithRequest Reminder", {
       body: `${prayer.title} from ${listName}`,
       tag: `prayer-${prayer.id}`,
     });
   }
 }
 
+/**
+ * Checks all prayers with alertEnabled=true to see if their nextAlertAt
+ * timestamp has passed. Fires alerts and reschedules to the next day.
+ * Called on an ALERT_POLL_INTERVAL_MS interval by init().
+ */
 function processAlerts() {
   const now = Date.now();
 
@@ -760,6 +1077,19 @@ function processAlerts() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Bootstraps the dashboard:
+ *   1. Loads cached session from localStorage.
+ *   2. Redirects to login if not authenticated.
+ *   3. Attaches all event listeners.
+ *   4. Fetches the latest user data from the server (hydrateFromServer).
+ *   5. Renders the initial UI.
+ *   6. Starts the alert polling interval.
+ */
 async function init() {
   loadState();
 
