@@ -1,7 +1,7 @@
 # ADR-0009: Embedded Document Model (Single User Document)
 
 **Date:** 2024  
-**Status:** Accepted
+**Status:** Accepted (storage engine changed to DynamoDB by [ADR-0013](0013-dynamodb-single-table.md); the embedding decision itself is unchanged — one DynamoDB item now holds the tree instead of one Mongoose document)
 
 ## Context
 

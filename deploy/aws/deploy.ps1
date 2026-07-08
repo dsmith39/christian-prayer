@@ -2,7 +2,6 @@
 param(
     [string]$EnvFile = "deploy/aws/aws.env",
     [switch]$SkipPrepare,
-    [switch]$SkipDocker,
     [switch]$SkipBackend,
     [switch]$SkipFrontend,
     [switch]$DryRun
@@ -119,75 +118,49 @@ $envFilePath = Join-Path $repoRoot $EnvFile
 $envValues = Parse-EnvFile -Path $envFilePath
 
 $awsRegion = Get-RequiredValue -Values $envValues -Key "AWS_REGION"
-$awsAccountId = Get-RequiredValue -Values $envValues -Key "AWS_ACCOUNT_ID"
-$ecrRepository = Get-OptionalValue -Values $envValues -Key "ECR_REPOSITORY" -Default "faithrequest-api"
-$imageTag = Get-OptionalValue -Values $envValues -Key "IMAGE_TAG" -Default "latest"
-$ecsCluster = Get-OptionalValue -Values $envValues -Key "ECS_CLUSTER"
-$ecsService = Get-OptionalValue -Values $envValues -Key "ECS_SERVICE"
+$lambdaFunctionName = Get-OptionalValue -Values $envValues -Key "LAMBDA_FUNCTION_NAME" -Default "faithrequest-api"
 $frontendBucket = Get-OptionalValue -Values $envValues -Key "FRONTEND_S3_BUCKET"
 $cloudFrontDistributionId = Get-OptionalValue -Values $envValues -Key "CLOUDFRONT_DISTRIBUTION_ID"
 
-$imageUri = "$awsAccountId.dkr.ecr.$awsRegion.amazonaws.com/$ecrRepository`:$imageTag"
-$taskDefinitionPath = Join-Path $repoRoot "deploy/aws/out/ecs-task-definition.json"
+$zipPath = Join-Path $repoRoot "deploy/aws/out/faithrequest-api.zip"
 $frontendPath = Join-Path $repoRoot "deploy/aws/out/frontend"
+$backendPath = Join-Path $repoRoot "backend"
 
 Write-Step "Checking required CLI tools"
 Assert-CommandAvailable -Name "node"
+Assert-CommandAvailable -Name "npm"
 Assert-CommandAvailable -Name "aws"
-if (-not $SkipDocker) {
-    Assert-CommandAvailable -Name "docker"
-}
 
 if (-not $SkipPrepare) {
     Write-Step "Generating deploy artifacts from $EnvFile"
     Invoke-CheckedCommand -FilePath "node" -Arguments @("deploy/aws/prepare.js", "--env-file", $EnvFile) -Description "AWS prepare"
 }
 
-if (-not (Test-Path $taskDefinitionPath)) {
-    throw "Generated ECS task definition not found: $taskDefinitionPath"
-}
-
 if ((-not $SkipFrontend) -and (-not (Test-Path $frontendPath))) {
     throw "Generated frontend bundle not found: $frontendPath"
 }
 
-if (-not $SkipDocker) {
-    Write-Step "Logging Docker into Amazon ECR"
-    $registry = "$awsAccountId.dkr.ecr.$awsRegion.amazonaws.com"
-    $loginCommand = "aws ecr get-login-password --region $awsRegion | docker login --username AWS --password-stdin $registry"
-    Write-Host $loginCommand -ForegroundColor DarkGray
-
-    if (-not $DryRun) {
-        $password = aws ecr get-login-password --region $awsRegion
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($password)) {
-            throw "Failed to retrieve an ECR login password."
-        }
-
-        $password | docker login --username AWS --password-stdin $registry
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker login to Amazon ECR failed."
-        }
-    }
-
-    Write-Step "Building and pushing backend image"
-    Invoke-CheckedCommand -FilePath "docker" -Arguments @("build", "-t", "$ecrRepository`:$imageTag", "./backend") -Description "Docker build"
-    Invoke-CheckedCommand -FilePath "docker" -Arguments @("tag", "$ecrRepository`:$imageTag", $imageUri) -Description "Docker tag"
-    Invoke-CheckedCommand -FilePath "docker" -Arguments @("push", $imageUri) -Description "Docker push"
-}
-
 if (-not $SkipBackend) {
-    Write-Step "Registering ECS task definition"
-    Invoke-CheckedCommand -FilePath "aws" -Arguments @("ecs", "register-task-definition", "--cli-input-json", "file://deploy/aws/out/ecs-task-definition.json") -Description "ECS task definition registration"
+    Write-Step "Installing production backend dependencies"
+    Invoke-CheckedCommand -FilePath "npm" -Arguments @("--prefix", "backend", "ci", "--omit=dev") -Description "npm ci"
 
-    if ($ecsCluster -and $ecsService) {
-        Write-Step "Triggering ECS service deployment"
-        Invoke-CheckedCommand -FilePath "aws" -Arguments @("ecs", "update-service", "--cluster", $ecsCluster, "--service", $ecsService, "--force-new-deployment") -Description "ECS service update"
+    Write-Step "Packaging backend for Lambda"
+    if (-not $DryRun) {
+        if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+        }
+        Compress-Archive -Path (Join-Path $backendPath "*") -DestinationPath $zipPath -Force
+    } else {
+        Write-Host "Compress-Archive -Path $backendPath\* -DestinationPath $zipPath -Force" -ForegroundColor DarkGray
     }
+
+    Write-Step "Updating Lambda function code"
+    Invoke-CheckedCommand -FilePath "aws" -Arguments @("lambda", "update-function-code", "--function-name", $lambdaFunctionName, "--zip-file", "fileb://deploy/aws/out/faithrequest-api.zip", "--region", $awsRegion) -Description "Lambda code update"
 }
 
 if (-not $SkipFrontend -and $frontendBucket) {
     Write-Step "Uploading frontend bundle to S3"
-    Invoke-CheckedCommand -FilePath "aws" -Arguments @("s3", "sync", "deploy/aws/out/frontend", "s3://$frontendBucket", "--delete") -Description "S3 sync"
+    Invoke-CheckedCommand -FilePath "aws" -Arguments @("s3", "sync", "deploy/aws/out/frontend", "s3://$frontendBucket", "--delete", "--region", $awsRegion) -Description "S3 sync"
 
     if ($cloudFrontDistributionId) {
         Write-Step "Invalidating CloudFront cache"

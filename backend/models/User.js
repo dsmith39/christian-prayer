@@ -1,163 +1,194 @@
 /**
  * models/User.js
  * ---------------
- * Mongoose schema definitions for the FaithRequest data model.
+ * DynamoDB data-access layer for FaithRequest users.
  *
- * Data model hierarchy (all stored inside one User document):
+ * Storage model (table: DYNAMODB_TABLE_NAME) mirrors the previous embedded
+ * Mongoose document almost exactly — one item holds the user's full profile
+ * plus their entire prayerLists[] -> prayers[] tree as a nested attribute:
  *
- *   User
- *   └─ prayerLists[]   (PrayerListSchema)
- *      └─ prayers[]    (PrayerRequestSchema)
+ *   Profile item : pk="USER#<uuid>"   sk="PROFILE"
+ *                  { userId, name, email, passwordHash, prayerLists, createdAt, updatedAt }
+ *   Email lock   : pk="EMAIL#<email>" sk="PROFILE"
+ *                  { userId }
  *
- * Embedding lists and prayers directly in the User document means a single
- * MongoDB read/write covers all of a user's data — no joins needed. This
- * is a good fit for a personal app where one user's data is always accessed
- * together. See ADR-009 for the trade-off discussion.
- *
- * Field length limits mirror the maxlength constraints in the frontend forms
- * so validation is consistent at both layers.
+ * The email-lock item exists so registration can enforce a unique email with
+ * a single atomic TransactWriteItems call (both items are created/deleted
+ * together), and so login can look up a user by email with a direct key
+ * GetItem instead of a secondary index.
  */
-const mongoose = require("mongoose");
+const {
+  GetCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} = require("@aws-sdk/lib-dynamodb");
+const { v4: uuidv4 } = require("uuid");
+const { ddb, TABLE_NAME } = require("../config/dynamo");
+
+const userKey = (userId) => ({ pk: `USER#${userId}`, sk: "PROFILE" });
+const emailKey = (email) => ({ pk: `EMAIL#${email}`, sk: "PROFILE" });
 
 /**
- * A single prayer request inside a PrayerList.
+ * Shapes a raw DynamoDB profile item into the object shape the routes
+ * expect (mirrors the fields a Mongoose User document exposed).
  *
- * Fields:
- *   title       - Short label shown on the prayer card (max 80 chars).
- *   notes       - Optional longer description (max 240 chars).
- *   priority    - Visual urgency indicator: "gentle" | "normal" | "urgent".
- *   answered    - Flipped to true when the user marks the request answered.
- *                 Answered requests sort to the bottom of the list.
- *   alertEnabled - Whether a daily reminder should fire for this request.
- *   alertTime   - "HH:MM" (24-hour) string used by the frontend to compute
- *                 the next browser notification time. Null when alerts are off.
+ * @param {object|undefined} item
+ * @returns {object|null}
  */
-const PrayerRequestSchema = new mongoose.Schema(
-  {
-    title: {
-      type: String,
-      required: true,
-      trim: true,
-      maxlength: 80,
-    },
-    notes: {
-      type: String,
-      trim: true,
-      maxlength: 240,
-      default: "",
-    },
-    priority: {
-      type: String,
-      enum: ["gentle", "normal", "urgent"],
-      default: "normal",
-    },
-    answered: {
-      type: Boolean,
-      default: false,
-    },
-    alertEnabled: {
-      type: Boolean,
-      default: false,
-    },
-    /** "HH:MM" 24-hour time string, or null when alerts are disabled. */
-    alertTime: {
-      type: String,
-      default: null,
-    },
-  },
-  { _id: true, timestamps: true }
-);
-
-/**
- * A named collection of prayer requests belonging to one user.
- *
- * Fields:
- *   name        - Display name (max 40 chars).
- *   description - Optional subtitle shown under the list name (max 90 chars).
- *   isSystem    - True for built-in lists (Uncategorized) that cannot be
- *                 deleted or renamed.
- *   systemKey   - Machine-readable key for system lists (e.g. "uncategorized").
- *                 Used instead of name comparisons to be rename-safe.
- *   prayers     - Embedded array of PrayerRequestSchema documents.
- */
-const PrayerListSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-      maxlength: 40,
-    },
-    description: {
-      type: String,
-      trim: true,
-      maxlength: 90,
-      default: "",
-    },
-    /** True for system-managed lists the user cannot delete. */
-    isSystem: {
-      type: Boolean,
-      default: false,
-    },
-    /** Stable identifier for system lists (e.g. "uncategorized"). */
-    systemKey: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    prayers: {
-      type: [PrayerRequestSchema],
-      default: [],
-    },
-  },
-  { _id: true, timestamps: true }
-);
-
-/**
- * A registered FaithRequest user account.
- *
- * Fields:
- *   name         - Display name (max 80 chars).
- *   email        - Unique login identifier, stored lowercase.
- *   passwordHash - bcrypt hash of the user's password.
- *                  select: false means it is NEVER returned in API responses
- *                  unless explicitly requested with .select("+passwordHash").
- *   prayerLists  - All of the user's prayer lists and their requests.
- *
- * versionKey: false removes the __v field from API responses.
- */
-const UserSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-      maxlength: 80,
-    },
-    email: {
-      type: String,
-      required: true,
-      lowercase: true,
-      trim: true,
-      unique: true,   // Enforced by a MongoDB unique index.
-      index: true,
-    },
-    /** bcrypt hash — never returned in API responses (select: false). */
-    passwordHash: {
-      type: String,
-      required: true,
-      select: false,
-    },
-    prayerLists: {
-      type: [PrayerListSchema],
-      default: [],
-    },
-  },
-  {
-    timestamps: true,   // Adds createdAt and updatedAt automatically.
-    versionKey: false,  // Suppresses __v in API responses.
+function toUser(item) {
+  if (!item) {
+    return null;
   }
-);
 
-module.exports = mongoose.model("User", UserSchema);
+  return {
+    _id: item.userId,
+    name: item.name,
+    email: item.email,
+    passwordHash: item.passwordHash,
+    prayerLists: item.prayerLists || [],
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
+}
 
+/**
+ * Creates a new user. Throws an error with code "DUPLICATE_EMAIL" if the
+ * email is already registered — the email-lock item's conditional put fails
+ * the whole transaction atomically, so this is race-safe under concurrent
+ * registrations for the same address.
+ *
+ * @param {{ name: string, email: string, passwordHash: string, prayerLists: object[] }} input
+ * @returns {Promise<object>}
+ */
+async function createUser({ name, email, passwordHash, prayerLists }) {
+  const userId = uuidv4();
+  const now = new Date().toISOString();
+
+  const profileItem = {
+    ...userKey(userId),
+    userId,
+    name,
+    email,
+    passwordHash,
+    prayerLists,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: { ...emailKey(email), userId },
+              ConditionExpression: "attribute_not_exists(pk)",
+            },
+          },
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: profileItem,
+              ConditionExpression: "attribute_not_exists(pk)",
+            },
+          },
+        ],
+      })
+    );
+  } catch (error) {
+    if (error.name === "TransactionCanceledException") {
+      const duplicate = new Error("A user with this email already exists");
+      duplicate.code = "DUPLICATE_EMAIL";
+      throw duplicate;
+    }
+    throw error;
+  }
+
+  return toUser(profileItem);
+}
+
+/**
+ * Looks up a user by email via the email-lock item.
+ *
+ * @param {string} email
+ * @returns {Promise<object|null>}
+ */
+async function findByEmail(email) {
+  const lock = await ddb.send(
+    new GetCommand({ TableName: TABLE_NAME, Key: emailKey(email) })
+  );
+
+  if (!lock.Item) {
+    return null;
+  }
+
+  return findById(lock.Item.userId);
+}
+
+/**
+ * Looks up a user by ID.
+ *
+ * @param {string} userId
+ * @returns {Promise<object|null>}
+ */
+async function findById(userId) {
+  const result = await ddb.send(
+    new GetCommand({ TableName: TABLE_NAME, Key: userKey(userId) })
+  );
+
+  return toUser(result.Item);
+}
+
+/**
+ * Persists prayerLists (and bumps updatedAt) for an existing user. Mirrors
+ * the previous `user.save()` call after mutating prayerLists in place.
+ *
+ * @param {string} userId
+ * @param {{ prayerLists: object[] }} updates
+ */
+async function updateUser(userId, { prayerLists }) {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: userKey(userId),
+      UpdateExpression: "SET prayerLists = :prayerLists, updatedAt = :updatedAt",
+      ExpressionAttributeValues: {
+        ":prayerLists": prayerLists,
+        ":updatedAt": new Date().toISOString(),
+      },
+    })
+  );
+}
+
+/**
+ * Deletes a user and its email-lock item together.
+ *
+ * @param {string} userId
+ * @returns {Promise<boolean>} false if the user didn't exist.
+ */
+async function deleteUser(userId) {
+  const user = await findById(userId);
+  if (!user) {
+    return false;
+  }
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        { Delete: { TableName: TABLE_NAME, Key: userKey(userId) } },
+        { Delete: { TableName: TABLE_NAME, Key: emailKey(user.email) } },
+      ],
+    })
+  );
+
+  return true;
+}
+
+module.exports = {
+  createUser,
+  findByEmail,
+  findById,
+  updateUser,
+  deleteUser,
+};

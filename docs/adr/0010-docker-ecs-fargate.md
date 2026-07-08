@@ -1,7 +1,7 @@
 # ADR-0010: Docker + AWS ECS Fargate for Backend Deployment
 
 **Date:** 2024  
-**Status:** Accepted
+**Status:** Superseded by [ADR-0014](0014-lambda-api-gateway.md) (2026-07-07)
 
 ## Context
 

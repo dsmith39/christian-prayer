@@ -13,9 +13,8 @@
  * every authenticated request.
  *
  * Passwords are hashed with bcryptjs at cost factor 12 before storage.
- * The raw passwordHash field is excluded from all Mongoose query results by
- * default (select: false on the schema); it must be explicitly requested
- * with .select("+passwordHash") when needed for comparison.
+ * Response objects are always built by hand (never spread from the raw user
+ * record), so passwordHash is never returned to the client.
  */
 const express = require("express");
 const bcrypt = require("bcryptjs");
@@ -34,13 +33,13 @@ const EMAIL_MAX = 254;
  * Signs and returns a JWT containing the user's ID and email.
  * Token expiry is 7 days; the frontend will redirect to login on 401.
  *
- * @param {object} user - A Mongoose User document.
+ * @param {object} user - A user record from models/User.js.
  * @returns {string} Signed JWT string.
  */
 function signToken(user) {
   return jwt.sign(
     {
-      userId: String(user._id),
+      userId: user._id,
       email: user.email,
     },
     process.env.JWT_SECRET,
@@ -87,20 +86,31 @@ router.post("/register", async (req, res, next) => {
     }
 
     // Return 409 if the email is already registered rather than leaking a DB
-    // error to the client.
-    const existing = await User.findOne({ email });
+    // error to the client. This is a best-effort early check; createUser's
+    // transactional email-lock item is the authoritative guard against a
+    // concurrent duplicate registration.
+    const existing = await User.findByEmail(email);
     if (existing) {
       return res.status(409).json({ message: "A user with this email already exists" });
     }
 
     // Hash password at cost 12 (~300 ms on commodity hardware) before saving.
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({
-      name,
-      email,
-      passwordHash,
-      prayerLists: [buildUncategorizedList()],
-    });
+
+    let user;
+    try {
+      user = await User.createUser({
+        name,
+        email,
+        passwordHash,
+        prayerLists: [buildUncategorizedList()],
+      });
+    } catch (error) {
+      if (error.code === "DUPLICATE_EMAIL") {
+        return res.status(409).json({ message: "A user with this email already exists" });
+      }
+      throw error;
+    }
 
     const token = signToken(user);
 
@@ -139,8 +149,7 @@ router.post("/login", async (req, res, next) => {
       return res.status(400).json({ message: "email and password are required" });
     }
 
-    // Explicitly request passwordHash since the schema hides it by default.
-    const user = await User.findOne({ email }).select("+passwordHash");
+    const user = await User.findByEmail(email);
     if (!user) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
@@ -154,7 +163,7 @@ router.post("/login", async (req, res, next) => {
     // system-list feature was introduced.
     const { changed } = ensureUncategorizedList(user);
     if (changed) {
-      await user.save();
+      await User.updateUser(user._id, { prayerLists: user.prayerLists });
     }
 
     const token = signToken(user);
@@ -193,7 +202,7 @@ router.get("/me", authMiddleware, async (req, res, next) => {
     // Self-healing: ensure Uncategorized list exists even for older accounts.
     const { changed } = ensureUncategorizedList(user);
     if (changed) {
-      await user.save();
+      await User.updateUser(user._id, { prayerLists: user.prayerLists });
     }
 
     return res.status(200).json({

@@ -20,6 +20,7 @@
  * copy in a single round-trip, avoiding stale-data bugs.
  */
 const express = require("express");
+const { v4: uuidv4 } = require("uuid");
 const User = require("../models/User");
 const {
   ensureUncategorizedList,
@@ -44,10 +45,10 @@ const ALERT_TIME_PATTERN = /^\d{2}:\d{2}$/;
 // ---------------------------------------------------------------------------
 
 /**
- * Shapes the user document into the standard API response object.
+ * Shapes the user record into the standard API response object.
  * Only the fields the frontend needs are exposed.
  *
- * @param {object} user - A Mongoose User document.
+ * @param {object} user - A user record from models/User.js.
  * @returns {object}
  */
 function userResponse(user) {
@@ -75,10 +76,34 @@ async function findUserWithUncategorized(userId) {
 
   const { changed } = ensureUncategorizedList(user);
   if (changed) {
-    await user.save();
+    await User.updateUser(userId, { prayerLists: user.prayerLists });
   }
 
   return user;
+}
+
+/**
+ * Finds a prayer list by _id within a user's prayerLists array.
+ * Replaces the Mongoose subdocument `.id()` helper now that prayerLists is a
+ * plain array.
+ *
+ * @param {object} user
+ * @param {string} listId
+ * @returns {object|undefined}
+ */
+function findList(user, listId) {
+  return user.prayerLists.find((list) => list._id === listId);
+}
+
+/**
+ * Finds a prayer by _id within a list's prayers array.
+ *
+ * @param {object} list
+ * @param {string} prayerId
+ * @returns {object|undefined}
+ */
+function findPrayer(list, prayerId) {
+  return list.prayers.find((prayer) => prayer._id === prayerId);
 }
 
 /**
@@ -161,8 +186,8 @@ router.post("/lists", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    user.prayerLists.push({ name, description, prayers: [] });
-    await user.save();
+    user.prayerLists.push({ _id: uuidv4(), name, description, prayers: [] });
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
 
     return res.status(201).json({ user: userResponse(user) });
   } catch (error) {
@@ -200,7 +225,7 @@ router.patch("/lists/:listId", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const list = user.prayerLists.id(req.params.listId);
+    const list = findList(user, req.params.listId);
     if (!list) {
       return res.status(404).json({ message: "Prayer list not found" });
     }
@@ -217,7 +242,7 @@ router.patch("/lists/:listId", async (req, res, next) => {
       list.description = description;
     }
 
-    await user.save();
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
 
     return res.status(200).json({ user: userResponse(user) });
   } catch (error) {
@@ -240,7 +265,7 @@ router.delete("/lists/:listId", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const list = user.prayerLists.id(req.params.listId);
+    const list = findList(user, req.params.listId);
     if (!list) {
       return res.status(404).json({ message: "Prayer list not found" });
     }
@@ -249,8 +274,8 @@ router.delete("/lists/:listId", async (req, res, next) => {
       return res.status(403).json({ message: "Uncategorized list cannot be deleted" });
     }
 
-    list.deleteOne();
-    await user.save();
+    user.prayerLists = user.prayerLists.filter((item) => item._id !== list._id);
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
 
     return res.status(200).json({ user: userResponse(user) });
   } catch (error) {
@@ -286,12 +311,13 @@ router.post("/lists/:listId/prayers", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const list = user.prayerLists.id(req.params.listId);
+    const list = findList(user, req.params.listId);
     if (!list) {
       return res.status(404).json({ message: "Prayer list not found" });
     }
 
     list.prayers.push({
+      _id: uuidv4(),
       title,
       notes,
       priority,
@@ -300,7 +326,7 @@ router.post("/lists/:listId/prayers", async (req, res, next) => {
       alertTime,
     });
 
-    await user.save();
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
     return res.status(201).json({ user: userResponse(user) });
   } catch (error) {
     return next(error);
@@ -341,6 +367,7 @@ router.post("/prayers", async (req, res, next) => {
     }
 
     uncategorizedList.prayers.push({
+      _id: uuidv4(),
       title,
       notes,
       priority,
@@ -349,7 +376,7 @@ router.post("/prayers", async (req, res, next) => {
       alertTime,
     });
 
-    await user.save();
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
     return res.status(201).json({ user: userResponse(user) });
   } catch (error) {
     return next(error);
@@ -374,12 +401,12 @@ router.patch("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const list = user.prayerLists.id(req.params.listId);
+    const list = findList(user, req.params.listId);
     if (!list) {
       return res.status(404).json({ message: "Prayer list not found" });
     }
 
-    const prayer = list.prayers.id(req.params.prayerId);
+    const prayer = findPrayer(list, req.params.prayerId);
     if (!prayer) {
       return res.status(404).json({ message: "Prayer request not found" });
     }
@@ -417,7 +444,7 @@ router.patch("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
       prayer.alertTime = req.body.alertEnabled && ALERT_TIME_PATTERN.test(rawAlertTime) ? rawAlertTime : null;
     }
 
-    await user.save();
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
     return res.status(200).json({ user: userResponse(user) });
   } catch (error) {
     return next(error);
@@ -438,18 +465,18 @@ router.delete("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const list = user.prayerLists.id(req.params.listId);
+    const list = findList(user, req.params.listId);
     if (!list) {
       return res.status(404).json({ message: "Prayer list not found" });
     }
 
-    const prayer = list.prayers.id(req.params.prayerId);
+    const prayer = findPrayer(list, req.params.prayerId);
     if (!prayer) {
       return res.status(404).json({ message: "Prayer request not found" });
     }
 
-    prayer.deleteOne();
-    await user.save();
+    list.prayers = list.prayers.filter((item) => item._id !== prayer._id);
+    await User.updateUser(user._id, { prayerLists: user.prayerLists });
 
     return res.status(200).json({ user: userResponse(user) });
   } catch (error) {
@@ -465,7 +492,7 @@ router.delete("/lists/:listId/prayers/:prayerId", async (req, res, next) => {
  */
 router.delete("/me", async (req, res, next) => {
   try {
-    const deleted = await User.findByIdAndDelete(req.auth.userId);
+    const deleted = await User.deleteUser(req.auth.userId);
     if (!deleted) {
       return res.status(404).json({ message: "User not found" });
     }

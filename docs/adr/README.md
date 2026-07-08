@@ -10,16 +10,18 @@ An ADR documents a significant architectural or technology choice made in the pr
 |---|---|---|
 | [0001](0001-vanilla-js-no-framework.md) | Vanilla JavaScript Frontend (No Framework) | Accepted |
 | [0002](0002-express-backend.md) | Express.js for the Backend API | Accepted |
-| [0003](0003-mongodb-mongoose.md) | MongoDB with Mongoose for Data Persistence | Accepted |
+| [0003](0003-mongodb-mongoose.md) | MongoDB with Mongoose for Data Persistence | Superseded by 0013 |
 | [0004](0004-jwt-authentication.md) | JWT for Stateless Authentication | Accepted |
 | [0005](0005-bcryptjs-password-hashing.md) | bcryptjs for Password Hashing | Accepted |
 | [0006](0006-express-rate-limit.md) | Rate Limiting on Auth and Mutation Endpoints | Accepted |
 | [0007](0007-localstorage-session.md) | localStorage for Frontend Session Persistence | Accepted |
 | [0008](0008-web-notifications-api.md) | Web Notifications API for Prayer Reminders | Accepted |
 | [0009](0009-embedded-document-model.md) | Embedded Document Model (Single User Document) | Accepted |
-| [0010](0010-docker-ecs-fargate.md) | Docker + AWS ECS Fargate for Backend Deployment | Accepted |
+| [0010](0010-docker-ecs-fargate.md) | Docker + AWS ECS Fargate for Backend Deployment | Superseded by 0014 |
 | [0011](0011-s3-cloudfront-frontend.md) | S3 + CloudFront for Frontend Deployment | Accepted |
-| [0012](0012-mongodb-atlas.md) | MongoDB Atlas as Managed Database Service | Accepted |
+| [0012](0012-mongodb-atlas.md) | MongoDB Atlas as Managed Database Service | Superseded by 0013 |
+| [0013](0013-dynamodb-single-table.md) | DynamoDB Single-Table Design Replaces MongoDB Atlas | Accepted |
+| [0014](0014-lambda-api-gateway.md) | AWS Lambda + API Gateway Replaces ECS Fargate + ALB | Accepted |
 
 ## ADR Format
 

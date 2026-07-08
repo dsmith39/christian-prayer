@@ -112,103 +112,16 @@ function optionalValue(env, key, fallback) {
 }
 
 function collectConfig(env) {
-  const awsRegion = requiredValue(env, "AWS_REGION");
-  const awsAccountId = requiredValue(env, "AWS_ACCOUNT_ID");
-  const ecrRepository = optionalValue(env, "ECR_REPOSITORY", "faithrequest-api");
-  const imageTag = optionalValue(env, "IMAGE_TAG", "latest");
-  const containerPort = Number(optionalValue(env, "CONTAINER_PORT", "5000"));
-
   return {
-    awsRegion,
-    awsAccountId,
-    ecrRepository,
-    imageTag,
-    imageUri: `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/${ecrRepository}:${imageTag}`,
-    ecsTaskFamily: optionalValue(env, "ECS_TASK_FAMILY", "faithrequest-api"),
-    ecsContainerName: optionalValue(env, "ECS_CONTAINER_NAME", "faithrequest-api"),
-    ecsExecutionRoleArn: requiredValue(env, "ECS_EXECUTION_ROLE_ARN"),
-    ecsTaskRoleArn: requiredValue(env, "ECS_TASK_ROLE_ARN"),
-    ecsCpu: optionalValue(env, "ECS_CPU", "256"),
-    ecsMemory: optionalValue(env, "ECS_MEMORY", "512"),
-    containerPort,
-    logGroup: optionalValue(env, "LOG_GROUP", "/ecs/faithrequest-api"),
-    logStreamPrefix: optionalValue(env, "LOG_STREAM_PREFIX", "ecs"),
+    awsRegion: requiredValue(env, "AWS_REGION"),
+    awsAccountId: requiredValue(env, "AWS_ACCOUNT_ID"),
+    lambdaFunctionName: optionalValue(env, "LAMBDA_FUNCTION_NAME", "faithrequest-api"),
     apiBaseUrl: requiredValue(env, "API_BASE_URL"),
     clientOrigin: requiredValue(env, "CLIENT_ORIGIN"),
-    mongodbSecretArn: requiredValue(env, "MONGODB_URI_SECRET_ARN"),
+    dynamodbTableName: optionalValue(env, "DYNAMODB_TABLE_NAME", "faithrequest-users"),
     jwtSecretArn: requiredValue(env, "JWT_SECRET_ARN"),
     frontendS3Bucket: optionalValue(env, "FRONTEND_S3_BUCKET", ""),
     cloudFrontDistributionId: optionalValue(env, "CLOUDFRONT_DISTRIBUTION_ID", ""),
-    ecsCluster: optionalValue(env, "ECS_CLUSTER", ""),
-    ecsService: optionalValue(env, "ECS_SERVICE", ""),
-  };
-}
-
-function buildTaskDefinition(config) {
-  return {
-    family: config.ecsTaskFamily,
-    networkMode: "awsvpc",
-    requiresCompatibilities: ["FARGATE"],
-    cpu: String(config.ecsCpu),
-    memory: String(config.ecsMemory),
-    executionRoleArn: config.ecsExecutionRoleArn,
-    taskRoleArn: config.ecsTaskRoleArn,
-    containerDefinitions: [
-      {
-        name: config.ecsContainerName,
-        image: config.imageUri,
-        essential: true,
-        portMappings: [
-          {
-            containerPort: config.containerPort,
-            hostPort: config.containerPort,
-            protocol: "tcp",
-          },
-        ],
-        healthCheck: {
-          command: [
-            "CMD-SHELL",
-            `wget -qO- http://localhost:${config.containerPort}/api/health || exit 1`,
-          ],
-          interval: 30,
-          timeout: 5,
-          retries: 3,
-          startPeriod: 30,
-        },
-        logConfiguration: {
-          logDriver: "awslogs",
-          options: {
-            "awslogs-group": config.logGroup,
-            "awslogs-region": config.awsRegion,
-            "awslogs-stream-prefix": config.logStreamPrefix,
-          },
-        },
-        secrets: [
-          {
-            name: "MONGODB_URI",
-            valueFrom: config.mongodbSecretArn,
-          },
-          {
-            name: "JWT_SECRET",
-            valueFrom: config.jwtSecretArn,
-          },
-        ],
-        environment: [
-          {
-            name: "NODE_ENV",
-            value: "production",
-          },
-          {
-            name: "PORT",
-            value: String(config.containerPort),
-          },
-          {
-            name: "CLIENT_ORIGIN",
-            value: config.clientOrigin,
-          },
-        ],
-      },
-    ],
   };
 }
 
@@ -252,26 +165,18 @@ function stageFrontend(config) {
 
 function buildNextSteps(config) {
   const commands = [
-    `aws ecr get-login-password --region ${config.awsRegion} | docker login --username AWS --password-stdin ${config.awsAccountId}.dkr.ecr.${config.awsRegion}.amazonaws.com`,
-    `docker build -t ${config.ecrRepository}:${config.imageTag} ./backend`,
-    `docker tag ${config.ecrRepository}:${config.imageTag} ${config.imageUri}`,
-    `docker push ${config.imageUri}`,
-    "aws ecs register-task-definition --cli-input-json file://deploy/aws/out/ecs-task-definition.json",
+    "cd backend && npm ci --omit=dev && cd ..",
+    "powershell -Command \"Compress-Archive -Path backend/* -DestinationPath deploy/aws/out/faithrequest-api.zip -Force\"",
+    `aws lambda update-function-code --function-name ${config.lambdaFunctionName} --zip-file fileb://deploy/aws/out/faithrequest-api.zip --region ${config.awsRegion}`,
   ];
 
-  if (config.ecsCluster && config.ecsService) {
-    commands.push(
-      `aws ecs update-service --cluster ${config.ecsCluster} --service ${config.ecsService} --force-new-deployment`
-    );
-  }
-
   if (config.frontendS3Bucket) {
-    commands.push(`aws s3 sync deploy/aws/out/frontend s3://${config.frontendS3Bucket} --delete`);
+    commands.push(`aws s3 sync deploy/aws/out/frontend s3://${config.frontendS3Bucket} --delete --region ${config.awsRegion}`);
   }
 
   if (config.cloudFrontDistributionId) {
     commands.push(
-      `aws cloudfront create-invalidation --distribution-id ${config.cloudFrontDistributionId} --paths \"/*\"`
+      `aws cloudfront create-invalidation --distribution-id ${config.cloudFrontDistributionId} --paths "/*"`
     );
   }
 
@@ -290,19 +195,11 @@ function main() {
   const config = collectConfig(env);
 
   ensureDirectory(outDir);
-  const taskDefinition = buildTaskDefinition(config);
-  fs.writeFileSync(
-    path.join(outDir, "ecs-task-definition.json"),
-    `${JSON.stringify(taskDefinition, null, 2)}\n`,
-    "utf8"
-  );
-
   stageFrontend(config);
   fs.writeFileSync(path.join(outDir, "next-steps.txt"), `${buildNextSteps(config)}\n`, "utf8");
 
   console.log(`Prepared AWS assets from ${path.relative(rootDir, envFile)}.`);
   console.log("Generated files:");
-  console.log("- deploy/aws/out/ecs-task-definition.json");
   console.log("- deploy/aws/out/frontend/");
   console.log("- deploy/aws/out/next-steps.txt");
 }

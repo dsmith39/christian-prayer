@@ -1,7 +1,7 @@
 # ADR-0012: MongoDB Atlas as Managed Database Service
 
 **Date:** 2024  
-**Status:** Accepted
+**Status:** Superseded by [ADR-0013](0013-dynamodb-single-table.md) (2026-07-07)
 
 ## Context
 
