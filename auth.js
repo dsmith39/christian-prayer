@@ -19,20 +19,9 @@
  *   - On success, persists the JWT + user object and redirects to dashboard.
  *   - On failure, displays the server error message inline.
  *
- * Session data is stored in localStorage under STORAGE_KEY so it survives
- * page refreshes. The key must match the one used in app.js.
+ * Session persistence, the fetch wrapper, and HTML escaping all live in
+ * session.js (the `Session` global) — load session.js before this file.
  */
-
-/** localStorage key — must match the constant in app.js. */
-const STORAGE_KEY = "faithrequest-auth-v1";
-
-/**
- * Backend API base URL. Reads from window.APP_CONFIG (set in config.js) so
- * the same auth.js works in both dev and production without modification.
- */
-const API_BASE_URL =
-  window.APP_CONFIG?.API_BASE_URL ||
-  `${window.location.protocol}//${window.location.hostname}:5000/api`;
 
 /** "login" or "register" — determines which API endpoint to call. */
 const mode = document.body.dataset.authMode;
@@ -72,121 +61,6 @@ function setMessage(text) {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage session management
-// ---------------------------------------------------------------------------
-
-/**
- * Reads the persisted session state from localStorage.
- * Returns safe defaults on missing or corrupt data.
- *
- * @returns {{ selectedListId: string|null, auth: { token: string|null, user: object|null } }}
- */
-function readStoredState() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return { selectedListId: null, auth: { token: null, user: null } };
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return {
-      selectedListId: parsed.selectedListId || null,
-      auth: {
-        token: parsed.auth?.token || null,
-        user: parsed.auth?.user || null,
-      },
-    };
-  } catch {
-    // Corrupt data — remove it so the user can start fresh.
-    localStorage.removeItem(STORAGE_KEY);
-    return { selectedListId: null, auth: { token: null, user: null } };
-  }
-}
-
-/**
- * Persists a new JWT and user object while preserving the previously selected
- * list so the dashboard reopens on the same list after login.
- *
- * @param {string} token - Signed JWT from the server.
- * @param {object} user  - User object from the server response.
- */
-function saveSession(token, user) {
-  const existing = readStoredState();
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      selectedListId: existing.selectedListId,
-      auth: {
-        token,
-        user,
-      },
-    })
-  );
-}
-
-/**
- * Clears the auth token and user from localStorage without touching the
- * selectedListId, so after re-login the dashboard reopens on the last list.
- */
-function clearStoredSession() {
-  const existing = readStoredState();
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      selectedListId: existing.selectedListId,
-      auth: {
-        token: null,
-        user: null,
-      },
-    })
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Network
-// ---------------------------------------------------------------------------
-
-/**
- * Minimal fetch wrapper used only on auth pages. Throws on network error or
- * non-2xx responses, so callers can use try/catch.
- *
- * @param {string} path           - API path relative to API_BASE_URL.
- * @param {{ method?, body?, token? }} options
- * @returns {Promise<object>}     - Parsed JSON response body.
- */
-async function request(path, options = {}) {
-  const { method = "GET", body = null, token = null } = options;
-  const headers = {};
-
-  if (body) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  let response;
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch (_error) {
-    throw new Error("Cannot reach backend. Check your API base URL configuration.");
-  }
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.message || `Request failed with status ${response.status}`);
-  }
-
-  return payload;
-}
-
-// ---------------------------------------------------------------------------
 // Auto-redirect
 // ---------------------------------------------------------------------------
 
@@ -196,7 +70,7 @@ async function request(path, options = {}) {
  * logged-in users never see the login/register form.
  */
 async function tryAutoRedirect() {
-  const stored = readStoredState();
+  const stored = Session.readStoredState();
   if (!stored.auth.token) {
     return;
   }
@@ -205,12 +79,12 @@ async function tryAutoRedirect() {
   submitBtn.disabled = true;
 
   try {
-    const payload = await request("/auth/me", { token: stored.auth.token });
-    saveSession(stored.auth.token, payload.user || stored.auth.user);
+    const payload = await Session.apiRequest("/auth/me", { token: stored.auth.token });
+    Session.saveSession({ token: stored.auth.token, user: payload.user || stored.auth.user });
     window.location.href = "dashboard.html";
   } catch {
     // Token is expired or invalid — clear it and let the user log in manually.
-    clearStoredSession();
+    Session.clearStoredSession();
     setMessage("Session expired. Please log in again.");
   } finally {
     submitBtn.disabled = false;
@@ -245,12 +119,13 @@ async function handleSubmit(event) {
         throw new Error("Password is required.");
       }
 
-      const payload = await request("/auth/login", {
+      const payload = await Session.apiRequest("/auth/login", {
         method: "POST",
         body: { email, password },
+        token: null,
       });
 
-      saveSession(payload.token, payload.user);
+      Session.saveSession({ token: payload.token, user: payload.user });
       window.location.href = "dashboard.html";
       return;
     }
@@ -272,12 +147,13 @@ async function handleSubmit(event) {
         throw new Error("Password must be at least 8 characters.");
       }
 
-      const payload = await request("/auth/register", {
+      const payload = await Session.apiRequest("/auth/register", {
         method: "POST",
         body: { name, email, password },
+        token: null,
       });
 
-      saveSession(payload.token, payload.user);
+      Session.saveSession({ token: payload.token, user: payload.user });
       window.location.href = "dashboard.html";
       return;
     }
@@ -297,4 +173,3 @@ if (form) {
   form.addEventListener("submit", handleSubmit);
   tryAutoRedirect();
 }
-

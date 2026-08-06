@@ -5,16 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FaithRequest | Log In</title>
     <link rel="icon" href="favicon.ico" sizes="any" />
+    <script>
+      (function () {
+        var t = localStorage.getItem("faithrequest-theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="components.css" />
     <link rel="stylesheet" href="auth-pages.css" />
   </head>
   <body data-auth-mode="login">
-    <main class="main-wrap">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <button id="themeToggleBtn" class="theme-toggle icon-button" type="button" aria-label="Toggle dark mode"></button>
+
+    <main class="main-wrap" id="main">
       <section class="card stack">
         <p class="eyebrow">FaithRequest</p>
         <h2>Log In</h2>
@@ -42,6 +55,9 @@
     </main>
 
     <script src="config.js"></script>
+    <script src="session.js"></script>
+    <script src="icons.js"></script>
+    <script src="theme.js"></script>
     <script src="auth.js"></script>
   </body>
 </html>

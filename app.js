@@ -15,31 +15,25 @@
  *   - Browser notifications are optional. The app still works with in-app
  *     toast messages if the user denies notification permission.
  *
+ * Shared helpers (session/API/escaping in session.js, icons in icons.js,
+ * the confirm/edit dialogs in modal.js, theme toggle in theme.js) are all
+ * loaded as globals (Session, Icons, Modal) before this file.
+ *
  * Key concepts:
- *   state         - Single source of truth for lists, prayers, and auth.
- *   dom           - Cached references to DOM elements (queried once on load).
- *   STORAGE_KEY   - localStorage key for persisting session between page loads.
- *   apiRequest()  - Fetch wrapper: attaches Bearer token, parses JSON, handles
- *                   401 (session expired → redirect to login).
- *   applyUserData()- Transforms the server User document into local state shape.
- *   render()      - Reads state and rebuilds the DOM.
- *   init()        - Entry point, called on DOMContentLoaded.
+ *   state           - Single source of truth for lists, prayers, and auth.
+ *   dom             - Cached references to DOM elements (queried once on load).
+ *   apiRequest()    - Thin wrapper around Session.apiRequest that supplies the
+ *                     current token and clears the session on 401.
+ *   applyUserData() - Transforms the server User document into local state shape.
+ *   render()        - Reads state and rebuilds the DOM.
+ *   loadDashboard() - Fetches server state, showing skeletons while pending and
+ *                     a retry state on failure.
+ *   init()          - Entry point, called on DOMContentLoaded.
  */
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** localStorage key — must match the constant in auth.js. */
-const STORAGE_KEY = "faithrequest-auth-v1";
-
-/**
- * Backend API base URL. Reads from window.APP_CONFIG (set in config.js) so
- * the same app.js works in dev and production without modification.
- */
-const API_BASE_URL =
-  window.APP_CONFIG?.API_BASE_URL ||
-  `${window.location.protocol}//${window.location.hostname}:5000/api`;
 
 /** How often (ms) the alert scheduler runs to check if a prayer reminder is due. */
 const ALERT_POLL_INTERVAL_MS = 30_000;
@@ -73,6 +67,9 @@ const state = {
   },
 };
 
+/** Set once the alert-polling interval has started, to avoid starting it twice on retry. */
+let alertsStarted = false;
+
 // ---------------------------------------------------------------------------
 // DOM element cache
 // ---------------------------------------------------------------------------
@@ -103,6 +100,7 @@ const dom = {
   accountEmailText: document.getElementById("accountEmailText"),
   authStatus: document.getElementById("authStatus"),
   logoutBtn: document.getElementById("logoutBtn"),
+  quickAddFab: document.getElementById("quickAddFab"),
 };
 
 // ---------------------------------------------------------------------------
@@ -115,20 +113,10 @@ const dom = {
  * the server on each load.
  */
 function loadState() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    state.selectedListId = typeof parsed.selectedListId === "string" ? parsed.selectedListId : null;
-    state.auth.token = typeof parsed.auth?.token === "string" ? parsed.auth.token : null;
-    state.auth.user = parsed.auth?.user || null;
-  } catch {
-    // Corrupt data — remove it so the app starts clean.
-    localStorage.removeItem(STORAGE_KEY);
-  }
+  const stored = Session.readStoredState();
+  state.selectedListId = stored.selectedListId;
+  state.auth.token = stored.auth.token;
+  state.auth.user = stored.auth.user;
 }
 
 /**
@@ -136,16 +124,11 @@ function loadState() {
  * Called after every mutation that changes selectedListId or auth.
  */
 function saveState() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      selectedListId: state.selectedListId,
-      auth: {
-        token: state.auth.token,
-        user: state.auth.user,
-      },
-    })
-  );
+  Session.saveSession({
+    selectedListId: state.selectedListId,
+    token: state.auth.token,
+    user: state.auth.user,
+  });
 }
 
 /**
@@ -168,7 +151,7 @@ function clearSession() {
   state.lists = [];
   state.prayers = [];
   state.selectedListId = null;
-  saveState();
+  Session.clearStoredSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -194,23 +177,6 @@ function isAuthenticated() {
 // ---------------------------------------------------------------------------
 // Utility functions
 // ---------------------------------------------------------------------------
-
-/**
- * Escapes HTML special characters to prevent XSS when inserting user-supplied
- * text via innerHTML. Use this on every piece of user content rendered into
- * the DOM with innerHTML or template literals.
- *
- * @param {string|number} text
- * @returns {string} HTML-safe string.
- */
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 /**
  * Calculates the Unix timestamp (ms) of the next occurrence of the given
@@ -264,6 +230,8 @@ function formatDateTime(timestamp) {
 /**
  * Displays a temporary toast message in the aria-live toast region.
  * Supports an optional action button (e.g. "Undo") for reversible operations.
+ * The auto-dismiss timer pauses while the toast is hovered or focused so a
+ * user reading it doesn't have it disappear mid-read.
  *
  * @param {string} message             - Text to display.
  * @param {{ durationMs?, actionText?, onAction? }} options
@@ -275,6 +243,7 @@ function showToast(message, options = {}) {
   const { durationMs = TOAST_DURATION_MS, actionText = null, onAction = null } = options;
   const toast = document.createElement("div");
   toast.className = "toast";
+  toast.tabIndex = -1;
 
   const messageSpan = document.createElement("span");
   messageSpan.className = "toast-message";
@@ -295,9 +264,35 @@ function showToast(message, options = {}) {
 
   dom.toastRegion.appendChild(toast);
 
-  setTimeout(() => {
-    toast.remove();
-  }, durationMs);
+  let remaining = durationMs;
+  let timerId = null;
+  let startedAt = Date.now();
+
+  function start(ms) {
+    startedAt = Date.now();
+    timerId = setTimeout(() => toast.remove(), ms);
+  }
+
+  function pause() {
+    if (timerId) {
+      clearTimeout(timerId);
+      timerId = null;
+      remaining -= Date.now() - startedAt;
+    }
+  }
+
+  function resume() {
+    if (!timerId && remaining > 0) {
+      start(remaining);
+    }
+  }
+
+  toast.addEventListener("mouseenter", pause);
+  toast.addEventListener("mouseleave", resume);
+  toast.addEventListener("focusin", pause);
+  toast.addEventListener("focusout", resume);
+
+  start(remaining);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,55 +300,33 @@ function showToast(message, options = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch wrapper for all authenticated API calls.
+ * Thin wrapper around Session.apiRequest that supplies the current auth
+ * token and clears the session (redirecting to login) on a 401 response.
  *
- * - Attaches the Bearer token from state.auth.token.
- * - Serializes body as JSON when provided.
- * - Automatically handles 401 (session expired): clears session and redirects.
- * - Throws descriptive errors for all non-2xx responses so callers can
- *   display them via showToast().
- *
- * @param {string} path                  - API path relative to API_BASE_URL.
+ * @param {string} path                  - API path relative to the API base URL.
  * @param {{ method?, body? }} options
  * @returns {Promise<object>}            - Parsed JSON response body.
  * @throws {Error}                       - On network failure or non-2xx status.
  */
 async function apiRequest(path, options = {}) {
-  const { method = "GET", body = null } = options;
-  const headers = {
-    Authorization: `Bearer ${state.auth.token}`,
-  };
+  let unauthorized = false;
 
-  if (body !== null) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method,
-      headers,
-      body: body === null ? undefined : JSON.stringify(body),
+    return await Session.apiRequest(path, {
+      ...options,
+      token: state.auth.token,
+      onUnauthorized: () => {
+        unauthorized = true;
+        clearSession();
+        redirectToLogin();
+      },
     });
-  } catch (_error) {
-    throw new Error("Cannot reach backend. Check your API base URL configuration.");
-  }
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      // Token is expired or revoked — clear the session and send the user
-      // back to the login page.
-      clearSession();
-      redirectToLogin();
+  } catch (error) {
+    if (unauthorized) {
       throw new Error("Your session expired. Please log in again.");
     }
-
-    throw new Error(payload.message || `Request failed with status ${response.status}`);
+    throw error;
   }
-
-  return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,8 +344,6 @@ async function apiRequest(path, options = {}) {
  *
  * @param {object} user - The full User document from the API response.
  */
-
-
 function applyUserData(user) {
   const previousSelected = state.selectedListId;
   const nextLists = [];
@@ -484,6 +455,37 @@ function setFormsEnabled(enabled) {
 }
 
 // ---------------------------------------------------------------------------
+// Loading / error states
+// ---------------------------------------------------------------------------
+
+/** Renders shimmering placeholder rows/cards while the initial fetch is in flight. */
+function renderSkeletons() {
+  dom.listContainer.innerHTML = Array.from({ length: 3 })
+    .map(() => '<div class="skeleton skeleton-list-row"></div>')
+    .join("");
+  dom.prayerGrid.innerHTML = Array.from({ length: 4 })
+    .map(() => '<div class="skeleton skeleton-card"></div>')
+    .join("");
+  dom.requestCount.textContent = "Loading...";
+}
+
+/** Renders an error state with a retry button when the initial fetch fails. */
+function renderLoadError(message) {
+  dom.listContainer.innerHTML = "";
+  dom.prayerGrid.innerHTML = `
+    <div class="empty error-state">
+      <p>${Session.escapeHtml(message || "Could not load your account.")}</p>
+      <button type="button" id="retryLoadBtn" class="secondary">
+        ${Icons.icon("refresh", { size: 14 })} Try again
+      </button>
+    </div>
+  `;
+  document.getElementById("retryLoadBtn")?.addEventListener("click", () => {
+    loadDashboard();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -520,10 +522,14 @@ function renderLists() {
     const count = getListPrayerCount(list.id);
     button.innerHTML = `
       <strong>
-        ${escapeHtml(list.name)}
-        ${isLockedList ? '<span class="system-lock-badge" aria-label="Protected list" title="Protected list">Lock</span>' : ""}
+        ${Session.escapeHtml(list.name)}
+        ${
+          isLockedList
+            ? `<span class="system-lock-badge">${Icons.icon("lock", { size: 12 })} Protected</span>`
+            : ""
+        }
       </strong>
-      <small>${escapeHtml(list.description || "No description")}</small>
+      <small>${Session.escapeHtml(list.description || "No description")}</small>
       ${isLockedList ? '<small>Default list</small>' : ""}
       <small>${count} active request${count === 1 ? "" : "s"}</small>
     `;
@@ -540,7 +546,7 @@ function renderLists() {
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className = "list-delete-btn";
-      deleteButton.textContent = "Delete";
+      deleteButton.innerHTML = `${Icons.icon("trash", { size: 14 })} Delete`;
       deleteButton.title = `Delete ${list.name}`;
       deleteButton.addEventListener("click", async () => {
         await queueListDeletion(list.id, list.name);
@@ -679,7 +685,7 @@ async function commitListDeletion(listId, listName) {
 
 /**
  * Begins the soft-delete flow for a prayer list:
- *   1. Confirms with the user via window.confirm.
+ *   1. Confirms with the user via an accessible modal dialog.
  *   2. Marks the list as pending deletion so it disappears from the UI.
  *   3. Starts a LIST_DELETE_UNDO_MS countdown toast with an Undo button.
  *   4. On expiry, calls commitListDeletion() to hit the DELETE API.
@@ -701,9 +707,14 @@ async function queueListDeletion(listId, listName) {
     return;
   }
 
-  const confirmed = window.confirm(
-    `Delete the prayer list \"${listName}\" and all its prayer requests?`
-  );
+  const confirmed = await Modal.confirmModal({
+    title: "Delete prayer list?",
+    body: `Delete the prayer list "${listName}" and all its prayer requests? You'll have ${
+      LIST_DELETE_UNDO_MS / 1000
+    } seconds to undo this.`,
+    confirmText: "Delete",
+    danger: true,
+  });
   if (!confirmed) {
     return;
   }
@@ -751,7 +762,7 @@ function renderPrayerPanelHeader() {
  * Sort order: active prayers (newest first) → answered prayers.
  * Each card renders the title, notes, priority tag, alert info, and
  * action buttons (Mark Answered/Active + Delete) via data attributes.
- * All user-supplied text is passed through escapeHtml() before injection.
+ * All user-supplied text is passed through Session.escapeHtml() before injection.
  */
 function renderPrayers() {
   dom.prayerGrid.innerHTML = "";
@@ -788,19 +799,19 @@ function renderPrayers() {
       const priorityLabel =
         item.priority === "urgent" ? "Urgent" : item.priority === "gentle" ? "Gentle" : "Normal";
       card.innerHTML = `
-        <h4>${escapeHtml(item.title)}</h4>
-        <p>${escapeHtml(item.notes || "No notes provided.")}</p>
+        <h4>${Session.escapeHtml(item.title)}</h4>
+        <p>${Session.escapeHtml(item.notes || "No notes provided.")}</p>
         <div class="tag-row">
           <span class="tag ${item.priority === "urgent" ? "urgent" : ""}">${priorityLabel}</span>
           ${item.answered ? '<span class="tag answered">Answered</span>' : ""}
-          <span class="tag">${item.alertEnabled ? `Alert: ${escapeHtml(item.alertTime || "Not set")}` : "Alert off"}</span>
+          <span class="tag">${item.alertEnabled ? `Alert: ${Session.escapeHtml(item.alertTime || "Not set")}` : "Alert off"}</span>
         </div>
-        <small>Next reminder: ${escapeHtml(formatDateTime(item.nextAlertAt))}</small>
+        <small>Next reminder: ${Session.escapeHtml(formatDateTime(item.nextAlertAt))}</small>
         <div class="card-actions">
           <button type="button" class="secondary" data-action="toggle" data-id="${item.id}">
-            ${item.answered ? "Mark Active" : "Mark Answered"}
+            ${Icons.icon(item.answered ? "undo" : "check", { size: 14 })} ${item.answered ? "Mark Active" : "Mark Answered"}
           </button>
-          <button type="button" class="warn" data-action="delete" data-id="${item.id}">Delete</button>
+          <button type="button" class="warn" data-action="delete" data-id="${item.id}">${Icons.icon("trash", { size: 14 })} Delete</button>
         </div>
       `;
 
@@ -827,6 +838,33 @@ function render() {
 async function hydrateFromServer() {
   const payload = await apiRequest("/auth/me");
   applyUserData(payload.user);
+}
+
+/**
+ * Fetches the latest server state and renders it, showing skeleton
+ * placeholders while the request is in flight and a retry state on failure.
+ * Safe to call again (e.g. from the retry button) without re-registering
+ * event listeners or starting a second alert-polling interval.
+ */
+async function loadDashboard() {
+  renderSkeletons();
+  dom.authStatus.textContent = "Loading your account...";
+
+  try {
+    await hydrateFromServer();
+  } catch (error) {
+    renderLoadError(error.message);
+    showToast(error.message || "Could not load your account.");
+    return;
+  }
+
+  render();
+
+  if (!alertsStarted) {
+    alertsStarted = true;
+    processAlerts();
+    setInterval(processAlerts, ALERT_POLL_INTERVAL_MS);
+  }
 }
 
 /** Clears the session and redirects to the login page. */
@@ -945,7 +983,8 @@ async function createPrayer(event) {
  * Reads data-action ("toggle" | "delete") and data-id from the clicked button.
  *
  *   toggle - Flips the answered state of the prayer request.
- *   delete - Permanently removes the prayer request.
+ *   delete - Confirms via an accessible modal, then permanently removes the
+ *            prayer request.
  *
  * @param {MouseEvent} event
  */
@@ -961,6 +1000,18 @@ async function handlePrayerGridClick(event) {
 
   if (!prayer) {
     return;
+  }
+
+  if (action === "delete") {
+    const confirmed = await Modal.confirmModal({
+      title: "Delete this prayer request?",
+      body: `This will permanently delete "${prayer.title}".`,
+      confirmText: "Delete",
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
+    }
   }
 
   try {
@@ -1002,18 +1053,18 @@ async function handlePrayerGridClick(event) {
 function updateNotificationButton() {
   if (!("Notification" in window)) {
     dom.enableNotificationsBtn.disabled = true;
-    dom.enableNotificationsBtn.textContent = "Notifications not supported";
+    dom.enableNotificationsBtn.innerHTML = `${Icons.icon("bell", { size: 14 })} Notifications not supported`;
     return;
   }
 
   if (Notification.permission === "granted") {
     dom.enableNotificationsBtn.disabled = true;
-    dom.enableNotificationsBtn.textContent = "Notifications enabled";
+    dom.enableNotificationsBtn.innerHTML = `${Icons.icon("bell", { size: 14 })} Notifications enabled`;
     return;
   }
 
   dom.enableNotificationsBtn.disabled = false;
-  dom.enableNotificationsBtn.textContent = "Enable Notifications";
+  dom.enableNotificationsBtn.innerHTML = `${Icons.icon("bell", { size: 14 })} Enable Notifications`;
 }
 
 /**
@@ -1060,7 +1111,7 @@ function triggerPrayerAlert(prayer) {
 /**
  * Checks all prayers with alertEnabled=true to see if their nextAlertAt
  * timestamp has passed. Fires alerts and reschedules to the next day.
- * Called on an ALERT_POLL_INTERVAL_MS interval by init().
+ * Called on an ALERT_POLL_INTERVAL_MS interval by loadDashboard().
  */
 function processAlerts() {
   const now = Date.now();
@@ -1086,9 +1137,7 @@ function processAlerts() {
  *   1. Loads cached session from localStorage.
  *   2. Redirects to login if not authenticated.
  *   3. Attaches all event listeners.
- *   4. Fetches the latest user data from the server (hydrateFromServer).
- *   5. Renders the initial UI.
- *   6. Starts the alert polling interval.
+ *   4. Loads the latest data from the server via loadDashboard().
  */
 async function init() {
   loadState();
@@ -1104,16 +1153,14 @@ async function init() {
   dom.prayerGrid.addEventListener("click", handlePrayerGridClick);
   dom.logoutBtn.addEventListener("click", logout);
 
-  try {
-    await hydrateFromServer();
-  } catch (error) {
-    showToast(error.message || "Could not load your account.");
-    return;
-  }
+  dom.quickAddFab.innerHTML = Icons.icon("plus", { size: 20, label: "Add prayer request" });
+  dom.quickAddFab.addEventListener("click", () => {
+    const target = getSelectedList() ? dom.prayerTitle : dom.listName;
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    target?.focus({ preventScroll: true });
+  });
 
-  setInterval(processAlerts, ALERT_POLL_INTERVAL_MS);
-  processAlerts();
-  render();
+  await loadDashboard();
 }
 
 init();
