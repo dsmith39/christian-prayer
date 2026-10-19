@@ -26,3 +26,9 @@ deploy/aws/aws.env
 Thumbs.db
 .vscode/
 .idea/
+
+# Agent working state (ops/README.md)
+ops/ceo-context.md
+ops/decisions.md
+ops/director-memos/
+ops/staff/
