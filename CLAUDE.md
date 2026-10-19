@@ -34,6 +34,22 @@ Redeploying code (not infrastructure) is scripted in `deploy/aws/` — see `depl
 2. Frontend: from the repo root, `npm install` then `npm run dev:frontend`, open `http://localhost:5500/index.html`.
 3. Full README is at [README.md](README.md).
 
+**Agents must not use the live table.** The note above is for Dillon. The staff agents below never touch production or real users' prayers; they test against a local DynamoDB emulator with made up data.
+
+## Staff Agents
+
+A director and four staff agents work on this project, built 2026-10-19 on the same pattern as Mile High Web Studio's. Charters are in `.claude/agents/`, the slash commands in `.claude/skills/`, and the shared rules, data ownership, and report format in [`docs/staff-handbook.md`](docs/staff-handbook.md).
+
+| Command | Role |
+|---|---|
+| `/director` | Whole app: weekly review, decisions, setup interview |
+| `/dev` | Features, fixes, and ADRs on a branch |
+| `/qa` | The missing test suite, branch review, privacy and accessibility review |
+| `/ops` | Deploys, backups, dependencies, cost, CI and IaC proposals |
+| `/growth` | Audience, SEO, copy, outreach, feedback |
+
+`node scripts/director/snapshot.mjs` prints the numbers they work from. Their state lives in the gitignored `ops/` (see `ops/README.md`). They draft and recommend only: merging, deploying, anything touching AWS, and anything touching real users' prayers stays with Dillon. Start with `/director setup`.
+
 ## Changelog
 
 ### 2026-07-07 — Migrated to DynamoDB + Lambda, deployed to faithrequest.com
