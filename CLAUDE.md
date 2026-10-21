@@ -38,17 +38,9 @@ Redeploying code (not infrastructure) is scripted in `deploy/aws/` — see `depl
 
 ## Staff Agents
 
-A director and four staff agents work on this project, built 2026-10-19 on the same pattern as Mile High Web Studio's. Charters are in `.claude/agents/`, the slash commands in `.claude/skills/`, and the shared rules, data ownership, and report format in [`docs/staff-handbook.md`](docs/staff-handbook.md).
+FaithRequest's team (a manager, who was the director, plus dev, qa, ops, and growth) moved to the workspace org on 2026-10-21: charters in `../.claude/agents/faithrequest-*.md`, rules, data ownership, and the report format in `../.claude/teams/faithrequest/handbook.md`. Run Claude from the workspace root: `/faithrequest` for the manager and `/faithrequest <role> <task>` for an employee.
 
-| Command | Role |
-|---|---|
-| `/director` | Whole app: weekly review, decisions, setup interview |
-| `/dev` | Features, fixes, and ADRs on a branch |
-| `/qa` | The missing test suite, branch review, privacy and accessibility review |
-| `/ops` | Deploys, backups, dependencies, cost, CI and IaC proposals |
-| `/growth` | Audience, SEO, copy, outreach, feedback |
-
-`node scripts/director/snapshot.mjs` prints the numbers they work from. Their state lives in the gitignored `ops/` (see `ops/README.md`). They draft and recommend only: merging, deploying, anything touching AWS, and anything touching real users' prayers stays with Dillon. Start with `/director setup`.
+`node scripts/director/snapshot.mjs` still prints the numbers they work from, and their state still lives in the gitignored `ops/` (see `ops/README.md`). The rules in the team handbook hold. Start with `/faithrequest setup`.
 
 ## Changelog
 

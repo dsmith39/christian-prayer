@@ -168,7 +168,7 @@ function teamReports() {
   });
 }
 
-if (!existsSync(join(OPS, "ceo-context.md"))) missing.push("ops/ceo-context.md (run /director setup)");
+if (!existsSync(join(OPS, "ceo-context.md"))) missing.push("ops/ceo-context.md (run /faithrequest setup from the workspace root)");
 
 const thisWeek = isoWeek(today);
 const decisions = openDecisions();
